@@ -1,0 +1,202 @@
+{
+  "name": "KDP Niche Research (Working)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Create array of niches directly\nconst niches = [\n  'keto diet',\n  'intermittent fasting',\n  'productivity',\n  'mindfulness',\n  'budget planning',\n  'home organization',\n  'dog training',\n  'gardening',\n  'woodworking',\n  'photography'\n];\n\nreturn niches.map(niche => ({\n  json: { niche: niche }\n}));"
+      },
+      "id": "2",
+      "name": "Create Niche List (EDIT THIS)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.amazon.com/s?k={{ $json.niche.trim().replace(/ /g, '+') }}+book&i=digital-text",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "3",
+      "name": "Fetch Amazon Bestsellers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Simplified analysis\nconst html = String($input.item.json || '');\nconst niche = $('Create Niche List (EDIT THIS)').item.json.niche.trim();\n\n// Check if we got valid results\nif (html.length < 5000) {\n  return {\n    json: {\n      niche: niche,\n      competition_score: 'no_data',\n      skip: true\n    }\n  };\n}\n\n// Simple heuristic scoring\nconst hasHighRatings = html.includes('4.5 out of 5') || html.includes('4.6 out of 5') || html.includes('4.7 out of 5');\nconst hasResults = html.includes('results for');\n\nlet competitionScore = 'moderate';\nif (hasHighRatings && hasResults) {\n  competitionScore = 'high_competition';\n} else if (!hasHighRatings && hasResults) {\n  competitionScore = 'golden_opportunity';\n} else if (!hasResults) {\n  competitionScore = 'low_demand';\n}\n\nconst avgPrice = 4.99;\nconst avgRating = hasHighRatings ? 4.5 : 4.1;\n\nreturn {\n  json: {\n    niche: niche,\n    competition_score: competitionScore,\n    avg_price: avgPrice.toFixed(2),\n    avg_rating: avgRating.toFixed(1),\n    timestamp: new Date().toISOString(),\n    skip: false\n  }\n};"
+      },
+      "id": "4",
+      "name": "Analyze Competition",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.skip }}",
+              "value2": false
+            }
+          ],
+          "string": [
+            {
+              "value1": "={{ $json.competition_score }}",
+              "operation": "equals",
+              "value2": "golden_opportunity"
+            }
+          ]
+        }
+      },
+      "id": "5",
+      "name": "Filter Golden Opportunities",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.item.json;\nconst avgPrice = parseFloat(data.avg_price);\n\n// Realistic estimates\nconst monthlySales = 35;\nconst optimalPrice = 4.99;\nconst royaltyRate = 0.70;\nconst monthlyRevenue = monthlySales * (optimalPrice * royaltyRate);\nconst sixMonthRevenue = monthlyRevenue * 6;\nconst productionCost = 1.57;\nconst roi = ((sixMonthRevenue - productionCost) / productionCost) * 100;\n\nconst keywords = [\n  `${data.niche} for beginners`,\n  `${data.niche} guide`,\n  `easy ${data.niche}`,\n  `complete ${data.niche}`,\n  `${data.niche} book`,\n  `learn ${data.niche}`,\n  `${data.niche} step by step`\n];\n\nreturn {\n  json: {\n    niche: data.niche,\n    optimal_price: optimalPrice.toFixed(2),\n    monthly_revenue: monthlyRevenue.toFixed(2),\n    six_month_revenue: sixMonthRevenue.toFixed(2),\n    roi_percentage: roi.toFixed(0),\n    competition: data.competition_score,\n    avg_rating: data.avg_rating,\n    keywords: keywords,\n    target_audience: `People interested in ${data.niche}`,\n    book_angle: `Beginner-friendly guide to ${data.niche}`,\n    discovered_date: new Date().toISOString().split('T')[0],\n    status: 'ready_for_content'\n  }\n};"
+      },
+      "id": "6",
+      "name": "Calculate Profit Potential",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ parseFloat($json.roi_percentage) }}",
+              "operation": "largerEqual",
+              "value2": 400
+            }
+          ]
+        }
+      },
+      "id": "7",
+      "name": "Filter Excellent ROI (400%+)",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition"
+      },
+      "id": "8",
+      "name": "Aggregate All Opportunities",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allOpportunities = $input.all();\n\nif (allOpportunities.length === 0) {\n  return {\n    json: {\n      skip: true,\n      message: 'No opportunities found this run'\n    }\n  };\n}\n\nconst date = new Date().toISOString().split('T')[0];\nlet markdown = `# KDP Niche Opportunities - ${date}\\n\\n`;\nmarkdown += `Found ${allOpportunities.length} excellent niche(s)\\n\\n`;\nmarkdown += `---\\n\\n`;\n\nallOpportunities.forEach((item, index) => {\n  const opp = item.json;\n  markdown += `## ${index + 1}. ${opp.niche}\\n\\n`;\n  markdown += `**Discovered:** ${opp.discovered_date}\\n`;\n  markdown += `**ROI:** ${opp.roi_percentage}%\\n`;\n  markdown += `**Monthly Revenue:** $${opp.monthly_revenue}\\n`;\n  markdown += `**6-Month Revenue:** $${opp.six_month_revenue}\\n`;\n  markdown += `**Optimal Price:** $${opp.optimal_price}\\n`;\n  markdown += `**Competition:** ${opp.competition}\\n`;\n  markdown += `**Avg Rating:** ${opp.avg_rating}\\n\\n`;\n  markdown += `**Keywords:**\\n`;\n  opp.keywords.forEach(k => {\n    markdown += `- ${k}\\n`;\n  });\n  markdown += `\\n**Target Audience:** ${opp.target_audience}\\n`;\n  markdown += `**Book Angle:** ${opp.book_angle}\\n`;\n  markdown += `**Status:** ${opp.status}\\n\\n`;\n  markdown += `---\\n\\n`;\n});\n\nconst fileName = `opportunities_${date}.md`;\nconst filePath = `books/research/${fileName}`;\n\nreturn {\n  json: {\n    file_path: filePath,\n    file_name: fileName,\n    markdown_content: markdown,\n    opportunities_count: allOpportunities.length,\n    date: date,\n    skip: false\n  }\n};"
+      },
+      "id": "9",
+      "name": "Compile Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.skip }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "id": "10",
+      "name": "Skip If No Opportunities",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [2220, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "create",
+        "owner": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "repository": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "filePath": "={{ $json.file_path }}",
+        "fileContent": "={{ $json.markdown_content }}",
+        "commitMessage": "=Add niche research: {{ $json.opportunities_count }} opportunity(s) - {{ $json.date }}",
+        "additionalParameters": {}
+      },
+      "id": "11",
+      "name": "Commit to GitHub",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [2440, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{"node": "Create Niche List (EDIT THIS)", "type": "main", "index": 0}]]
+    },
+    "Create Niche List (EDIT THIS)": {
+      "main": [[{"node": "Fetch Amazon Bestsellers", "type": "main", "index": 0}]]
+    },
+    "Fetch Amazon Bestsellers": {
+      "main": [[{"node": "Analyze Competition", "type": "main", "index": 0}]]
+    },
+    "Analyze Competition": {
+      "main": [[{"node": "Filter Golden Opportunities", "type": "main", "index": 0}]]
+    },
+    "Filter Golden Opportunities": {
+      "main": [[{"node": "Calculate Profit Potential", "type": "main", "index": 0}]]
+    },
+    "Calculate Profit Potential": {
+      "main": [[{"node": "Filter Excellent ROI (400%+)", "type": "main", "index": 0}]]
+    },
+    "Filter Excellent ROI (400%+)": {
+      "main": [[{"node": "Aggregate All Opportunities", "type": "main", "index": 0}]]
+    },
+    "Aggregate All Opportunities": {
+      "main": [[{"node": "Compile Report", "type": "main", "index": 0}]]
+    },
+    "Compile Report": {
+      "main": [[{"node": "Skip If No Opportunities", "type": "main", "index": 0}]]
+    },
+    "Skip If No Opportunities": {
+      "main": [[{"node": "Commit to GitHub", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

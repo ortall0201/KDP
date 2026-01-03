@@ -1,0 +1,147 @@
+{
+  "name": "KDP Cover Design (GPT-Image-1.5)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "niche",
+              "name": "niche",
+              "value": "Keto Diet for Beginners",
+              "type": "string"
+            },
+            {
+              "id": "genre",
+              "name": "genre",
+              "value": "health",
+              "type": "string"
+            },
+            {
+              "id": "book_id",
+              "name": "book_id",
+              "value": "={{ $now.format('yyyyMMdd-HHmmss') }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "2",
+      "name": "Set Book Details (EDIT THIS)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const niche = $input.item.json.niche;\nconst genre = $input.item.json.genre.toLowerCase();\n\nconst prompts = {\n  health: \"Professional health book cover, vibrant wellness imagery, modern clean design, inspiring and energetic colors, bold typography, bestseller quality, commercial publishing style\",\n  business: \"Professional business book cover, corporate clean design, success imagery, navy blue and gold colors, bold typography, authoritative feel, Fortune 500 aesthetic\",\n  cookbook: \"Professional cookbook cover, vibrant food photography, appetizing dish presentation, modern minimalist layout, warm colors, high-end culinary magazine style, Michelin-level quality\",\n  selfhelp: \"Inspiring self-help book cover, sunrise over mountains, peaceful empowering atmosphere, warm gradient colors (orange to blue), bold motivational typography, New York Times bestseller quality\",\n  fiction: \"Captivating fiction book cover, atmospheric mood lighting, dramatic composition, cinematic feel, commercial appeal, bestseller quality design, award-winning book aesthetic\"\n};\n\nconst prompt = prompts[genre] || prompts.selfhelp;\n\nreturn {\n  json: {\n    ...$input.item.json,\n    cover_prompt: `Create a professional Amazon KDP book cover for: ${niche}. ${prompt}. Portrait orientation, high resolution, photorealistic quality, no text or titles on the cover (text will be added separately). Make it eye-catching and professional.`\n  }\n};"
+      },
+      "id": "3",
+      "name": "Generate Cover Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/images/generations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-image-1.5\",\n  \"prompt\": \"{{ $json.cover_prompt }}\",\n  \"size\": \"1024x1536\",\n  \"n\": 1,\n  \"output_format\": \"png\",\n  \"output_compression\": 100\n}",
+        "options": {}
+      },
+      "id": "4",
+      "name": "Generate Cover (GPT-Image-1.5)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.data[0].url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "5",
+      "name": "Download Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const bookData = $('Generate Cover Prompt').item.json;\nconst imageBuffer = $input.item.binary.data.data;\n\nconst fileName = `cover_${bookData.book_id}_${bookData.niche.replace(/[^a-z0-9]/gi, '_')}.png`;\nconst githubPath = `books/covers/${fileName}`;\n\nreturn {\n  json: {\n    niche: bookData.niche,\n    genre: bookData.genre,\n    file_path: githubPath,\n    model: 'gpt-image-1.5',\n    size: '1024x1536'\n  },\n  binary: {\n    data: imageBuffer\n  }\n};"
+      },
+      "id": "6",
+      "name": "Prepare Cover File",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "create",
+        "owner": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "repository": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "filePath": "={{ $json.file_path }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "commitMessage": "=Add cover: {{ $json.niche }} ({{ $json.genre }}) - GPT-Image-1.5",
+        "additionalParameters": {}
+      },
+      "id": "7",
+      "name": "Commit to GitHub",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [[{"node": "Set Book Details (EDIT THIS)", "type": "main", "index": 0}]]
+    },
+    "Set Book Details (EDIT THIS)": {
+      "main": [[{"node": "Generate Cover Prompt", "type": "main", "index": 0}]]
+    },
+    "Generate Cover Prompt": {
+      "main": [[{"node": "Generate Cover (GPT-Image-1.5)", "type": "main", "index": 0}]]
+    },
+    "Generate Cover (GPT-Image-1.5)": {
+      "main": [[{"node": "Download Image", "type": "main", "index": 0}]]
+    },
+    "Download Image": {
+      "main": [[{"node": "Prepare Cover File", "type": "main", "index": 0}]]
+    },
+    "Prepare Cover File": {
+      "main": [[{"node": "Commit to GitHub", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
