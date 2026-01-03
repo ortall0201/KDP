@@ -1,0 +1,350 @@
+{
+  "name": "KDP Niche Research Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 3
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-001",
+      "name": "Schedule Every 3 Days",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "niche_seeds",
+              "value": "=keto diet,intermittent fasting,productivity,mindfulness,budget planning,home organization,dog training,gardening,woodworking,photography"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-niche-seeds-002",
+      "name": "Set Niche Seeds",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "niche_seeds",
+        "options": {
+          "destinationFieldName": "niche",
+          "separatorChar": ","
+        }
+      },
+      "id": "split-niches-003",
+      "name": "Split Into Individual Niches",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.amazon.com/s?k={{ $json.niche.trim() }} book&i=digital-text&rh=n:154606011",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "fetch-amazon-bestsellers-004",
+      "name": "Fetch Amazon Best Sellers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract top books from Amazon search results\nconst html = $input.item.json.data;\nconst niche = $('Split Into Individual Niches').item.json.niche;\n\n// Simple regex-based extraction (in production, use Cheerio)\nconst titleRegex = /<span class=\"a-size-medium a-color-base a-text-normal\">([^<]+)<\\/span>/g;\nconst priceRegex = /<span class=\"a-price-whole\">([^<]+)<\\/span>/g;\nconst ratingRegex = /<span class=\"a-icon-alt\">([\\d.]+) out of 5 stars<\\/span>/g;\n\nconst titles = [];\nconst prices = [];\nconst ratings = [];\n\nlet match;\nwhile ((match = titleRegex.exec(html)) !== null && titles.length < 20) {\n  titles.push(match[1]);\n}\n\nwhile ((match = priceRegex.exec(html)) !== null && prices.length < 20) {\n  prices.push(parseFloat(match[1]));\n}\n\nwhile ((match = ratingRegex.exec(html)) !== null && ratings.length < 20) {\n  ratings.push(parseFloat(match[1]));\n}\n\n// Combine data\nconst books = [];\nfor (let i = 0; i < Math.min(titles.length, 10); i++) {\n  books.push({\n    title: titles[i] || 'Unknown',\n    price: prices[i] || 4.99,\n    rating: ratings[i] || 4.0,\n    rank: i + 1\n  });\n}\n\n// Calculate competition metrics\nconst avgPrice = books.reduce((sum, b) => sum + b.price, 0) / books.length;\nconst avgRating = books.reduce((sum, b) => sum + b.rating, 0) / books.length;\nconst priceVariance = Math.sqrt(books.reduce((sum, b) => sum + Math.pow(b.price - avgPrice, 2), 0) / books.length);\n\n// Competition scoring\nlet competitionScore = 'unknown';\nif (avgRating > 4.5) competitionScore = 'high_competition';\nelse if (avgRating > 4.2 && avgPrice < 5.0) competitionScore = 'moderate';\nelse if (avgRating >= 3.8 && avgRating <= 4.3) competitionScore = 'golden_opportunity';\nelse competitionScore = 'low_demand';\n\nreturn {\n  json: {\n    niche: niche,\n    top_books: books,\n    analysis: {\n      avg_price: avgPrice.toFixed(2),\n      avg_rating: avgRating.toFixed(2),\n      price_variance: priceVariance.toFixed(2),\n      competition_score: competitionScore,\n      total_books_analyzed: books.length\n    },\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "analyze-competition-005",
+      "name": "Analyze Competition",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.analysis.competition_score }}",
+              "operation": "equals",
+              "value2": "golden_opportunity"
+            }
+          ]
+        }
+      },
+      "id": "filter-golden-opportunities-006",
+      "name": "Filter Golden Opportunities",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate profit potential\nconst data = $input.item.json;\nconst avgPrice = parseFloat(data.analysis.avg_price);\n\n// Estimate monthly sales based on competition\nfunction estimateMonthlySales(competitionScore, avgRating) {\n  const rating = parseFloat(avgRating);\n  \n  if (competitionScore === 'golden_opportunity') {\n    if (rating < 4.0) return 50;\n    if (rating < 4.2) return 35;\n    return 25;\n  }\n  return 10;\n}\n\nconst monthlySales = estimateMonthlySales(\n  data.analysis.competition_score,\n  data.analysis.avg_rating\n);\n\n// Calculate optimal price point\nconst optimalPrice = Math.max(2.99, Math.min(6.99, avgPrice));\nconst royaltyRate = (optimalPrice >= 2.99 && optimalPrice <= 9.99) ? 0.70 : 0.35;\n\n// Revenue calculations\nconst monthlyRevenue = monthlySales * (optimalPrice * royaltyRate);\nconst productionCost = 50; // Cover + editing\nconst sixMonthRevenue = monthlyRevenue * 6;\nconst roi = ((sixMonthRevenue - productionCost) / productionCost) * 100;\n\n// Keywords extraction (simplified - in production use keyword API)\nconst keywords = [\n  `${data.niche} for beginners`,\n  `${data.niche} guide`,\n  `easy ${data.niche}`,\n  `complete ${data.niche}`,\n  `${data.niche} book`\n];\n\nreturn {\n  json: {\n    niche: data.niche,\n    competition_analysis: data.analysis,\n    profit_analysis: {\n      optimal_price: optimalPrice.toFixed(2),\n      royalty_rate: (royaltyRate * 100).toFixed(0) + '%',\n      estimated_monthly_sales: monthlySales,\n      monthly_revenue: monthlyRevenue.toFixed(2),\n      six_month_revenue: sixMonthRevenue.toFixed(2),\n      production_cost: productionCost,\n      roi_percentage: roi.toFixed(0),\n      recommendation: roi > 500 ? 'EXCELLENT' : roi > 300 ? 'GOOD' : 'MODERATE'\n    },\n    suggested_keywords: keywords,\n    target_audience: `People interested in ${data.niche}`,\n    book_angle: `Beginner-friendly guide to ${data.niche}`,\n    discovered_date: new Date().toISOString().split('T')[0]\n  }\n};"
+      },
+      "id": "calculate-profit-potential-007",
+      "name": "Calculate Profit Potential",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.profit_analysis.recommendation }}",
+              "operation": "equals",
+              "value2": "EXCELLENT"
+            }
+          ],
+          "number": [
+            {
+              "value1": "={{ parseFloat($json.profit_analysis.roi_percentage) }}",
+              "operation": "largerEqual",
+              "value2": 400
+            }
+          ]
+        },
+        "combineOperation": "any"
+      },
+      "id": "filter-excellent-roi-008",
+      "name": "Filter Excellent ROI (400%+)",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "KDP Research Database"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Opportunities"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.discovered_date }}",
+            "Niche": "={{ $json.niche }}",
+            "Optimal_Price": "={{ $json.profit_analysis.optimal_price }}",
+            "Monthly_Revenue": "={{ $json.profit_analysis.monthly_revenue }}",
+            "Six_Month_Revenue": "={{ $json.profit_analysis.six_month_revenue }}",
+            "ROI_Percentage": "={{ $json.profit_analysis.roi_percentage }}",
+            "Competition": "={{ $json.competition_analysis.competition_score }}",
+            "Avg_Rating": "={{ $json.competition_analysis.avg_rating }}",
+            "Recommendation": "={{ $json.profit_analysis.recommendation }}",
+            "Keywords": "={{ $json.suggested_keywords.join(', ') }}",
+            "Target_Audience": "={{ $json.target_audience }}",
+            "Book_Angle": "={{ $json.book_angle }}",
+            "Status": "ready_for_content"
+          }
+        },
+        "options": {}
+      },
+      "id": "save-to-google-sheets-009",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [2000, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_CREDENTIALS_ID",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_CHANNEL_ID",
+          "mode": "list",
+          "cachedResultName": "#kdp-opportunities"
+        },
+        "text": "=🔥 **EXCELLENT NICHE DISCOVERED!** 🔥\n\n*Niche:* {{ $json.niche }}\n*Estimated Monthly Revenue:* ${{ $json.profit_analysis.monthly_revenue }}\n*6-Month Revenue:* ${{ $json.profit_analysis.six_month_revenue }}\n*ROI:* {{ $json.profit_analysis.roi_percentage }}%\n*Optimal Price:* ${{ $json.profit_analysis.optimal_price }}\n*Competition:* {{ $json.competition_analysis.competition_score }}\n\n*Keywords:*\n{{ $json.suggested_keywords.map((k, i) => `${i + 1}. ${k}`).join('\\n') }}\n\n*Target:* {{ $json.target_audience }}\n*Angle:* {{ $json.book_angle }}\n\n✅ *Status:* Ready for content creation!\n📊 *View full data in Google Sheets*",
+        "otherOptions": {}
+      },
+      "id": "slack-notification-010",
+      "name": "Slack - Hot Niche Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [2220, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIALS_ID",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@yourdomain.com",
+        "toEmail": "your-email@example.com",
+        "subject": "=🎯 New KDP Opportunity: {{ $json.niche }} - ROI {{ $json.profit_analysis.roi_percentage }}%",
+        "emailType": "html",
+        "message": "=<h2>🔥 Excellent Niche Opportunity Discovered!</h2>\n\n<table style=\"border-collapse: collapse; width: 100%; max-width: 600px;\">\n  <tr style=\"background: #f5f5f5;\">\n    <td style=\"padding: 10px; font-weight: bold;\">Niche</td>\n    <td style=\"padding: 10px;\">{{ $json.niche }}</td>\n  </tr>\n  <tr>\n    <td style=\"padding: 10px; font-weight: bold;\">Optimal Price</td>\n    <td style=\"padding: 10px;\">${{ $json.profit_analysis.optimal_price }}</td>\n  </tr>\n  <tr style=\"background: #f5f5f5;\">\n    <td style=\"padding: 10px; font-weight: bold;\">Monthly Revenue</td>\n    <td style=\"padding: 10px; color: green; font-weight: bold;\">${{ $json.profit_analysis.monthly_revenue }}</td>\n  </tr>\n  <tr>\n    <td style=\"padding: 10px; font-weight: bold;\">6-Month Revenue</td>\n    <td style=\"padding: 10px; color: green; font-weight: bold;\">${{ $json.profit_analysis.six_month_revenue }}</td>\n  </tr>\n  <tr style=\"background: #f5f5f5;\">\n    <td style=\"padding: 10px; font-weight: bold;\">ROI</td>\n    <td style=\"padding: 10px; color: green; font-weight: bold;\">{{ $json.profit_analysis.roi_percentage }}%</td>\n  </tr>\n  <tr>\n    <td style=\"padding: 10px; font-weight: bold;\">Competition</td>\n    <td style=\"padding: 10px;\">{{ $json.competition_analysis.competition_score }}</td>\n  </tr>\n</table>\n\n<h3>📌 Suggested Keywords</h3>\n<ul>\n{{ $json.suggested_keywords.map(k => `  <li>${k}</li>`).join('\\n') }}\n</ul>\n\n<h3>🎯 Book Strategy</h3>\n<p><strong>Target Audience:</strong> {{ $json.target_audience }}</p>\n<p><strong>Book Angle:</strong> {{ $json.book_angle }}</p>\n\n<hr>\n<p style=\"color: #666; font-size: 12px;\">Automated KDP Niche Research System | {{ $json.discovered_date }}</p>",
+        "options": {}
+      },
+      "id": "email-notification-011",
+      "name": "Email Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2220, 480],
+      "credentials": {
+        "smtp": {
+          "id": "YOUR_EMAIL_CREDENTIALS_ID",
+          "name": "Email SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Every 3 Days": {
+      "main": [
+        [
+          {
+            "node": "Set Niche Seeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Niche Seeds": {
+      "main": [
+        [
+          {
+            "node": "Split Into Individual Niches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Individual Niches": {
+      "main": [
+        [
+          {
+            "node": "Fetch Amazon Best Sellers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Amazon Best Sellers": {
+      "main": [
+        [
+          {
+            "node": "Analyze Competition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Competition": {
+      "main": [
+        [
+          {
+            "node": "Filter Golden Opportunities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Golden Opportunities": {
+      "main": [
+        [
+          {
+            "node": "Calculate Profit Potential",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Profit Potential": {
+      "main": [
+        [
+          {
+            "node": "Filter Excellent ROI (400%+)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Excellent ROI (400%+)": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Slack - Hot Niche Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2026-01-03T10:00:00.000Z",
+      "updatedAt": "2026-01-03T10:00:00.000Z",
+      "id": "kdp-research",
+      "name": "KDP Research"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2026-01-03T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}

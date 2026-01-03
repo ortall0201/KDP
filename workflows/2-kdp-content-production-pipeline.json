@@ -1,0 +1,498 @@
+{
+  "name": "KDP Content Production Pipeline",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-001",
+      "name": "Manual Trigger - Start Book",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "getAll",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "KDP Research Database"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Opportunities"
+        },
+        "filters": {
+          "values": [
+            {
+              "column": "Status",
+              "condition": "equals",
+              "value": "ready_for_content"
+            }
+          ]
+        },
+        "options": {
+          "range": "A2:M2"
+        }
+      },
+      "id": "get-niche-data-002",
+      "name": "Get Next Niche from Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4-turbo-preview",
+          "mode": "list",
+          "cachedResultName": "gpt-4-turbo-preview"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a professional KDP book outliner with 10+ years of experience creating bestselling books. Your outlines are detailed, well-structured, and designed to provide maximum value to readers."
+            },
+            {
+              "role": "user",
+              "content": "=Create a comprehensive book outline for:\n\n**Title:** {{ $json.Niche }} - Complete Beginner's Guide\n**Target Audience:** {{ $json.Target_Audience }}\n**Book Angle:** {{ $json.Book_Angle }}\n**Word Count Target:** 15,000-20,000 words\n**Price Point:** ${{ $json.Optimal_Price }}\n\nCreate an outline with:\n\n1. **Introduction** (1,000 words)\n   - Hook that grabs attention\n   - Problem/pain point identification\n   - Promise/transformation\n   - What readers will learn\n   - How to use this book\n\n2. **10-12 Main Chapters** (1,200-1,500 words each)\n   Each chapter should have:\n   - Clear chapter title\n   - 4-6 subsections\n   - Key concepts to cover\n   - Practical examples needed\n   - Actionable tips\n\n3. **Conclusion** (800 words)\n   - Summary of key points\n   - Implementation roadmap\n   - Encouragement\n   - Call to action\n\nMake it valuable, practical, and beginner-friendly. Focus on transformation and results."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 2500
+        }
+      },
+      "id": "generate-outline-003",
+      "name": "Generate Book Outline (GPT-4)",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.3,
+      "position": [680, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIALS_ID",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "book_id",
+              "name": "book_id",
+              "value": "={{ $now.format('yyyyMMdd-HHmmss') }}",
+              "type": "string"
+            },
+            {
+              "id": "niche_data",
+              "name": "niche_data",
+              "value": "={{ $('Get Next Niche from Sheets').item.json }}",
+              "type": "object"
+            },
+            {
+              "id": "outline",
+              "name": "outline",
+              "value": "={{ $json.message.content }}",
+              "type": "string"
+            },
+            {
+              "id": "chapters_to_generate",
+              "name": "chapters_to_generate",
+              "value": 12,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "store-book-data-004",
+      "name": "Store Book Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxIterations": 12
+        }
+      },
+      "id": "loop-chapters-005",
+      "name": "Loop Through Chapters",
+      "type": "n8n-nodes-base.loop",
+      "typeVersion": 1,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4-turbo-preview",
+          "mode": "list"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a professional KDP author who writes engaging, valuable, reader-friendly content. Your writing style is conversational yet authoritative. You use examples, stories, and actionable advice. You write content that readers love and leave 5-star reviews for."
+            },
+            {
+              "role": "user",
+              "content": "=Write Chapter {{ $('Loop Through Chapters').item.json.counter }} for this book:\n\n**Book Outline:**\n{{ $('Store Book Data').item.json.outline }}\n\n**Chapter Requirements:**\n- Word count: 1,500-2,000 words\n- Start with an engaging chapter introduction\n- Include 4-6 clear subsections with headers\n- Use practical examples and real-world scenarios\n- Provide actionable tips and advice\n- Include a \"Key Takeaways\" summary at the end\n- Write in a friendly, conversational tone\n- End with a smooth transition to the next chapter\n\n**Target Audience:** {{ $('Store Book Data').item.json.niche_data.Target_Audience }}\n\n**Focus:** Provide real value. Make it beginner-friendly but not dumbed down. Give readers something they can implement immediately.\n\nWrite the complete chapter now."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.8,
+          "maxTokens": 3000
+        }
+      },
+      "id": "generate-chapter-006",
+      "name": "Generate Chapter Content",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.3,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "chapter_number",
+              "name": "chapter_number",
+              "value": "={{ $('Loop Through Chapters').item.json.counter }}",
+              "type": "number"
+            },
+            {
+              "id": "chapter_content",
+              "name": "chapter_content",
+              "value": "={{ $json.message.content }}",
+              "type": "string"
+            },
+            {
+              "id": "word_count",
+              "name": "word_count",
+              "value": "={{ $json.message.content.split(' ').length }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-chapter-007",
+      "name": "Format Chapter Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "aggregate-chapters-008",
+      "name": "Aggregate All Chapters",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1780, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine all chapters into complete manuscript\nconst allChapters = $input.all();\nconst bookData = $('Store Book Data').first().json.niche_data;\nconst outline = $('Store Book Data').first().json.outline;\nconst bookId = $('Store Book Data').first().json.book_id;\n\n// Build complete manuscript\nlet manuscript = '';\nlet totalWordCount = 0;\n\n// Title Page\nmanuscript += `${bookData.Niche}\\n`;\nmanuscript += `Complete Beginner's Guide\\n\\n`;\nmanuscript += `By Your Author Name\\n\\n`;\nmanuscript += `\\n\\n═══════════════════════════════════════\\n\\n`;\n\n// Copyright\nmanuscript += `Copyright © ${new Date().getFullYear()} Your Author Name\\n\\n`;\nmanuscript += `All rights reserved. No part of this book may be reproduced in any form without permission in writing from the author.\\n\\n`;\nmanuscript += `Disclaimer: This book is for informational purposes only. The author is not liable for any actions taken based on this information.\\n\\n`;\nmanuscript += `\\n\\n═══════════════════════════════════════\\n\\n`;\n\n// Table of Contents\nmanuscript += `TABLE OF CONTENTS\\n\\n`;\nfor (let i = 1; i <= allChapters.length; i++) {\n  manuscript += `Chapter ${i}\\n`;\n}\nmanuscript += `Conclusion\\n\\n`;\nmanuscript += `\\n\\n═══════════════════════════════════════\\n\\n`;\n\n// Introduction\nmanuscript += `INTRODUCTION\\n\\n`;\nmanuscript += `Welcome to your journey into ${bookData.Niche}! This book is designed specifically for beginners who want to learn and master this topic step by step.\\n\\n`;\nmanuscript += `Whether you're completely new or have some basic knowledge, this guide will take you from beginner to confident practitioner. Each chapter builds on the previous one, providing you with practical knowledge you can apply immediately.\\n\\n`;\nmanuscript += `Let's get started!\\n\\n`;\nmanuscript += `\\n\\n═══════════════════════════════════════\\n\\n`;\n\n// All Chapters\nallChapters.forEach((item) => {\n  const chapterData = item.json;\n  manuscript += `\\n\\nCHAPTER ${chapterData.chapter_number}\\n\\n`;\n  manuscript += chapterData.chapter_content;\n  manuscript += `\\n\\n═══════════════════════════════════════\\n\\n`;\n  totalWordCount += chapterData.word_count;\n});\n\n// Conclusion\nmanuscript += `\\n\\nCONCLUSION\\n\\n`;\nmanuscript += `Congratulations on completing this guide to ${bookData.Niche}!\\n\\n`;\nmanuscript += `You now have the knowledge and tools to succeed. Remember, the key to mastery is consistent practice. Start implementing what you've learned today, and you'll see results.\\n\\n`;\nmanuscript += `Thank you for reading. If you found this book helpful, please consider leaving a review on Amazon. Your feedback helps other readers discover valuable resources.\\n\\n`;\nmanuscript += `To your success,\\nYour Author Name\\n\\n`;\nmanuscript += `\\n\\n═══════════════════════════════════════\\n\\n`;\n\n// Final word count\ntotalWordCount += 500; // Add intro + conclusion words\n\nreturn {\n  json: {\n    book_id: bookId,\n    title: bookData.Niche + ' - Complete Beginner\\'s Guide',\n    niche: bookData.Niche,\n    manuscript: manuscript,\n    total_word_count: totalWordCount,\n    total_chapters: allChapters.length,\n    optimal_price: bookData.Optimal_Price,\n    keywords: bookData.Keywords,\n    target_audience: bookData.Target_Audience,\n    generated_date: new Date().toISOString(),\n    status: 'content_generated'\n  }\n};"
+      },
+      "id": "compile-manuscript-009",
+      "name": "Compile Complete Manuscript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Save manuscript as text file for Google Drive\nconst bookData = $input.item.json;\n\nconst fileName = `${bookData.book_id}_${bookData.niche.replace(/[^a-z0-9]/gi, '_')}_manuscript.txt`;\n\nreturn {\n  json: {\n    ...bookData,\n    file_name: fileName\n  },\n  binary: {\n    data: Buffer.from(bookData.manuscript, 'utf8')\n  }\n};"
+      },
+      "id": "prepare-file-010",
+      "name": "Prepare File for Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 400]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "upload",
+        "name": "={{ $json.file_name }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "YOUR_MANUSCRIPTS_FOLDER_ID",
+          "cachedResultName": "KDP Manuscripts"
+        },
+        "options": {
+          "googleFileConvert": false
+        }
+      },
+      "id": "upload-to-drive-011",
+      "name": "Upload Manuscript to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2440, 400],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_GOOGLE_CREDENTIALS_ID",
+          "name": "Google Drive Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_SHEET_ID",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=1",
+          "mode": "list",
+          "cachedResultName": "Books"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Book_ID": "={{ $json.book_id }}",
+            "Title": "={{ $json.title }}",
+            "Niche": "={{ $json.niche }}",
+            "Word_Count": "={{ $json.total_word_count }}",
+            "Chapters": "={{ $json.total_chapters }}",
+            "Price": "={{ $json.optimal_price }}",
+            "Keywords": "={{ $json.keywords }}",
+            "Manuscript_URL": "={{ $json.webViewLink }}",
+            "Status": "content_ready",
+            "Generated_Date": "={{ $json.generated_date.split('T')[0] }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "update-database-012",
+      "name": "Update Books Database",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [2660, 400]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_CHANNEL_ID",
+          "mode": "list",
+          "cachedResultName": "#kdp-production"
+        },
+        "text": "=✅ **BOOK CONTENT GENERATED!**\n\n*Title:* {{ $json.title }}\n*Niche:* {{ $json.niche }}\n*Word Count:* {{ $json.total_word_count }} words\n*Chapters:* {{ $json.total_chapters }}\n*Book ID:* `{{ $json.book_id }}`\n\n📄 *Manuscript:* <{{ $json.webViewLink }}|View in Google Drive>\n\n*Next Steps:*\n1. Review content quality ✓\n2. Generate cover design 🎨\n3. Optimize metadata 🎯\n4. Manual KDP upload 📤\n\n*Projected Revenue:* ${{ $json.optimal_price }} × 30 sales = ${{ (parseFloat($json.optimal_price) * 0.70 * 30).toFixed(2) }}/month",
+        "otherOptions": {}
+      },
+      "id": "slack-notification-013",
+      "name": "Slack - Content Ready",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [2880, 400]
+    },
+    {
+      "parameters": {
+        "url": "=http://your-n8n-instance.com/webhook/cover-ready",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "trigger-cover-workflow-014",
+      "name": "Trigger Cover Design Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2880, 580]
+    }
+  ],
+  "connections": {
+    "Manual Trigger - Start Book": {
+      "main": [
+        [
+          {
+            "node": "Get Next Niche from Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Next Niche from Sheets": {
+      "main": [
+        [
+          {
+            "node": "Generate Book Outline (GPT-4)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Book Outline (GPT-4)": {
+      "main": [
+        [
+          {
+            "node": "Store Book Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Book Data": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Chapters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Through Chapters": {
+      "main": [
+        [
+          {
+            "node": "Generate Chapter Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate All Chapters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Chapter Content": {
+      "main": [
+        [
+          {
+            "node": "Format Chapter Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Chapter Data": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Chapters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate All Chapters": {
+      "main": [
+        [
+          {
+            "node": "Compile Complete Manuscript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Complete Manuscript": {
+      "main": [
+        [
+          {
+            "node": "Prepare File for Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare File for Upload": {
+      "main": [
+        [
+          {
+            "node": "Upload Manuscript to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Manuscript to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Update Books Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Books Database": {
+      "main": [
+        [
+          {
+            "node": "Slack - Content Ready",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Trigger Cover Design Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2026-01-03T10:00:00.000Z",
+      "updatedAt": "2026-01-03T10:00:00.000Z",
+      "id": "kdp-production",
+      "name": "KDP Production"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2026-01-03T10:00:00.000Z",
+  "versionId": "v1.0.0"
+}
