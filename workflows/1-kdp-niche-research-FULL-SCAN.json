@@ -1,0 +1,223 @@
+{
+  "name": "KDP Niche Research (FULL HTML SCAN)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Create array of niches\nconst niches = [\n  'keto diet',\n  'intermittent fasting',\n  'productivity',\n  'mindfulness',\n  'budget planning'\n];\n\nreturn niches.map(niche => ({\n  json: { niche: niche }\n}));"
+      },
+      "id": "2",
+      "name": "Create Niche List (EDIT THIS)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.amazon.com/s?k={{ $json.niche.trim().replace(/ /g, '+') }}+book&i=digital-text",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            },
+            {
+              "name": "Accept-Encoding",
+              "value": "gzip, deflate, br"
+            },
+            {
+              "name": "Referer",
+              "value": "https://www.amazon.com/"
+            },
+            {
+              "name": "DNT",
+              "value": "1"
+            },
+            {
+              "name": "Connection",
+              "value": "keep-alive"
+            },
+            {
+              "name": "Upgrade-Insecure-Requests",
+              "value": "1"
+            },
+            {
+              "name": "Sec-Fetch-Dest",
+              "value": "document"
+            },
+            {
+              "name": "Sec-Fetch-Mode",
+              "value": "navigate"
+            },
+            {
+              "name": "Sec-Fetch-Site",
+              "value": "same-origin"
+            },
+            {
+              "name": "Cache-Control",
+              "value": "max-age=0"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "3",
+      "name": "Fetch Amazon Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// FULL HTML SCAN - Extract REAL data from anywhere in the HTML\nconst response = $input.item.json;\nconst niche = $('Create Niche List (EDIT THIS)').item.json.niche.trim();\n\nconst statusCode = response.statusCode || 0;\nlet html = '';\n\nif (response.data) {\n  html = String(response.data);\n} else if (response.body) {\n  html = String(response.body);\n} else {\n  html = String(response);\n}\n\nif (statusCode !== 200 || html.length < 5000) {\n  return {\n    json: {\n      niche: niche,\n      error: `HTTP ${statusCode} or HTML too short`,\n      skip: true\n    }\n  };\n}\n\n// Try multiple price regex patterns across ENTIRE HTML\nconst pricePatterns = [\n  // Pattern 1: Standard whole + fraction\n  /<span class=\"a-price-whole\">([0-9]+)<\\/span><span class=\"a-price-fraction\">([0-9]+)<\\/span>/gi,\n  // Pattern 2: Offscreen price\n  /<span class=\"a-offscreen\">\\$([0-9]+\\.[0-9]{2})<\\/span>/gi,\n  // Pattern 3: data-a-price attribute\n  /data-a-price=\"([0-9]+\\.[0-9]{2})\"/gi,\n  // Pattern 4: Simple $X.XX in text\n  /\\$([0-9]+\\.[0-9]{2})/g\n];\n\nconst prices = [];\nfor (const pattern of pricePatterns) {\n  let match;\n  const regex = new RegExp(pattern.source, pattern.flags);\n  while ((match = regex.exec(html)) !== null) {\n    let price;\n    if (match[2]) {\n      // Whole + fraction format\n      price = parseFloat(match[1] + '.' + match[2]);\n    } else {\n      price = parseFloat(match[1]);\n    }\n    if (price > 0 && price < 100 && prices.length < 100) {\n      prices.push(price);\n    }\n  }\n  if (prices.length >= 10) break; // Found enough\n}\n\n// Try multiple rating patterns\nconst ratingPatterns = [\n  // Pattern 1: Icon alt text\n  /<span class=\"a-icon-alt\">([0-9]\\.[0-9]) out of 5 stars<\\/span>/gi,\n  // Pattern 2: aria-label\n  /aria-label=\"([0-9]\\.[0-9]) out of 5 stars\"/gi,\n  // Pattern 3: data attribute\n  /data-rating=\"([0-9]\\.[0-9])\"/gi\n];\n\nconst ratings = [];\nfor (const pattern of ratingPatterns) {\n  let match;\n  const regex = new RegExp(pattern.source, pattern.flags);\n  while ((match = regex.exec(html)) !== null) {\n    const rating = parseFloat(match[1]);\n    if (rating >= 0 && rating <= 5 && ratings.length < 100) {\n      ratings.push(rating);\n    }\n  }\n  if (ratings.length >= 10) break;\n}\n\n// Try multiple review count patterns\nconst reviewPatterns = [\n  // Pattern 1: Underline text\n  /<span class=\"a-size-base s-underline-text\">(\\d{1,3}(?:,\\d{3})*)<\\/span>/gi,\n  // Pattern 2: aria-label with ratings count\n  /aria-label=\"(\\d{1,3}(?:,\\d{3})*)\"/g,\n  // Pattern 3: Simple number in parentheses\n  /\\((\\d{1,3}(?:,\\d{3})*)\\)/g\n];\n\nconst reviewCounts = [];\nfor (const pattern of reviewPatterns) {\n  let match;\n  const regex = new RegExp(pattern.source, pattern.flags);\n  while ((match = regex.exec(html)) !== null) {\n    const count = parseInt(match[1].replace(/,/g, ''));\n    if (count > 0 && count < 1000000 && reviewCounts.length < 100) {\n      reviewCounts.push(count);\n    }\n  }\n  if (reviewCounts.length >= 10) break;\n}\n\n// Extract result count\nconst resultPatterns = [\n  /<span class=\"a-color-state a-text-bold\">(\\d{1,3}(?:,\\d{3})*) results<\\/span>/i,\n  /(\\d{1,3}(?:,\\d{3})*) results/i,\n  /\"totalResultCount\":(\\d+)/i\n];\n\nlet totalResults = 0;\nfor (const pattern of resultPatterns) {\n  const match = html.match(pattern);\n  if (match) {\n    totalResults = parseInt(match[1].replace(/,/g, ''));\n    break;\n  }\n}\n\n// Calculate REAL averages\nconst avgPrice = prices.length > 0 ? prices.reduce((a,b) => a+b, 0) / prices.length : 0;\nconst avgRating = ratings.length > 0 ? ratings.reduce((a,b) => a+b, 0) / ratings.length : 0;\nconst avgReviews = reviewCounts.length > 0 ? reviewCounts.reduce((a,b) => a+b, 0) / reviewCounts.length : 0;\n\n// Skip if we couldn't extract real data\nif (prices.length === 0 && ratings.length === 0) {\n  return {\n    json: {\n      niche: niche,\n      error: 'Could not extract any price or rating data',\n      prices_found: prices.length,\n      ratings_found: ratings.length,\n      reviews_found: reviewCounts.length,\n      html_length: html.length,\n      skip: true\n    }\n  };\n}\n\n// REAL competition scoring\nlet competitionScore = 'moderate';\nif (avgRating >= 4.5 && avgReviews > 500) {\n  competitionScore = 'high_competition';\n} else if (avgRating >= 4.0 && avgRating < 4.4 && totalResults > 100) {\n  competitionScore = 'golden_opportunity';\n} else if (totalResults < 50) {\n  competitionScore = 'low_demand';\n} else if (avgRating < 4.0) {\n  competitionScore = 'golden_opportunity';\n}\n\nreturn {\n  json: {\n    niche: niche,\n    avg_price: avgPrice,\n    avg_rating: avgRating,\n    avg_reviews: avgReviews,\n    total_results: totalResults,\n    books_analyzed: Math.max(prices.length, ratings.length),\n    competition_score: competitionScore,\n    price_min: prices.length > 0 ? Math.min(...prices) : 0,\n    price_max: prices.length > 0 ? Math.max(...prices) : 0,\n    rating_min: ratings.length > 0 ? Math.min(...ratings) : 0,\n    rating_max: ratings.length > 0 ? Math.max(...ratings) : 0,\n    prices_found: prices.length,\n    ratings_found: ratings.length,\n    reviews_found: reviewCounts.length,\n    timestamp: new Date().toISOString(),\n    skip: false\n  }\n};"
+      },
+      "id": "4",
+      "name": "Extract REAL Data (Full Scan)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.skip }}",
+              "value2": false
+            }
+          ],
+          "string": [
+            {
+              "value1": "={{ $json.competition_score }}",
+              "operation": "equals",
+              "value2": "golden_opportunity"
+            }
+          ]
+        }
+      },
+      "id": "5",
+      "name": "Filter Golden Opportunities",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.item.json;\n\nconst optimalPrice = Math.max(2.99, Math.min(9.99, data.avg_price));\n\n// Estimate sales based on REAL review data\nlet monthlySales;\nif (data.avg_reviews < 100) {\n  monthlySales = 50;\n} else if (data.avg_reviews < 300) {\n  monthlySales = 35;\n} else if (data.avg_reviews < 600) {\n  monthlySales = 20;\n} else {\n  monthlySales = 10;\n}\n\nconst royaltyRate = (optimalPrice >= 2.99 && optimalPrice <= 9.99) ? 0.70 : 0.35;\nconst monthlyRevenue = monthlySales * (optimalPrice * royaltyRate);\nconst sixMonthRevenue = monthlyRevenue * 6;\nconst productionCost = 1.57;\nconst roi = ((sixMonthRevenue - productionCost) / productionCost) * 100;\n\nconst keywords = [\n  data.niche + ' for beginners',\n  data.niche + ' guide',\n  'easy ' + data.niche,\n  'complete ' + data.niche,\n  data.niche + ' book',\n  'learn ' + data.niche,\n  data.niche + ' step by step'\n];\n\nreturn {\n  json: {\n    niche: data.niche,\n    avg_price: data.avg_price,\n    avg_rating: data.avg_rating,\n    avg_reviews: data.avg_reviews,\n    total_results: data.total_results,\n    books_analyzed: data.books_analyzed,\n    price_min: data.price_min,\n    price_max: data.price_max,\n    rating_min: data.rating_min,\n    rating_max: data.rating_max,\n    competition_score: data.competition_score,\n    prices_found: data.prices_found,\n    ratings_found: data.ratings_found,\n    reviews_found: data.reviews_found,\n    optimal_price: optimalPrice,\n    estimated_monthly_sales: monthlySales,\n    monthly_revenue: monthlyRevenue,\n    six_month_revenue: sixMonthRevenue,\n    roi_percentage: roi,\n    keywords: keywords,\n    target_audience: 'People interested in ' + data.niche,\n    book_angle: 'Beginner-friendly guide to ' + data.niche,\n    discovered_date: new Date().toISOString().split('T')[0],\n    status: 'ready_for_content'\n  }\n};"
+      },
+      "id": "6",
+      "name": "Calculate Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ parseFloat($json.roi_percentage) }}",
+              "operation": "largerEqual",
+              "value2": 400
+            }
+          ]
+        }
+      },
+      "id": "7",
+      "name": "Filter ROI 400%+",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allOpportunities = $input.all();\n\nif (allOpportunities.length === 0) {\n  return { json: { skip: true, message: 'No opportunities found' } };\n}\n\nconst now = new Date();\nconst timestamp = now.toISOString().replace(/[:.]/g, '-').substring(0, 19);\n\nlet markdown = '# KDP Niche Opportunities - REAL DATA\\n\\n';\nmarkdown += '**Generated:** ' + timestamp + '\\n';\nmarkdown += '**Found:** ' + allOpportunities.length + ' excellent niche(s)\\n\\n';\nmarkdown += '---\\n\\n';\n\nallOpportunities.forEach((item, index) => {\n  const o = item.json;\n  \n  markdown += '## ' + (index + 1) + '. ' + o.niche + '\\n\\n';\n  \n  markdown += '### Real Market Data (Extracted from Amazon)\\n\\n';\n  markdown += '- **Total Results:** ' + (o.total_results || 0).toLocaleString() + ' books\\n';\n  markdown += '- **Books Analyzed:** ' + (o.books_analyzed || 0) + '\\n';\n  markdown += '- **Data Quality:** ' + (o.prices_found || 0) + ' prices, ' + (o.ratings_found || 0) + ' ratings, ' + (o.reviews_found || 0) + ' review counts extracted\\n';\n  markdown += '- **Avg Price:** $' + (o.avg_price || 0).toFixed(2);\n  markdown += ' (range: $' + (o.price_min || 0).toFixed(2) + ' - $' + (o.price_max || 0).toFixed(2) + ')\\n';\n  markdown += '- **Avg Rating:** ' + (o.avg_rating || 0).toFixed(2) + ' stars';\n  markdown += ' (range: ' + (o.rating_min || 0).toFixed(2) + ' - ' + (o.rating_max || 0).toFixed(2) + ')\\n';\n  markdown += '- **Avg Reviews:** ' + (o.avg_reviews || 0).toLocaleString() + '\\n';\n  markdown += '- **Competition:** ' + (o.competition_score || 'unknown') + '\\n\\n';\n  \n  markdown += '### Opportunity Analysis\\n\\n';\n  markdown += '- **ROI:** ' + (o.roi_percentage || 0).toFixed(0) + '%\\n';\n  markdown += '- **Estimated Monthly Sales:** ' + (o.estimated_monthly_sales || 0) + ' books\\n';\n  markdown += '- **Monthly Revenue:** $' + (o.monthly_revenue || 0).toFixed(2) + '\\n';\n  markdown += '- **6-Month Revenue:** $' + (o.six_month_revenue || 0).toFixed(2) + '\\n';\n  markdown += '- **Optimal Price:** $' + (o.optimal_price || 0).toFixed(2) + '\\n\\n';\n  \n  markdown += '### Keywords\\n\\n';\n  if (Array.isArray(o.keywords)) {\n    o.keywords.forEach(k => markdown += '- ' + k + '\\n');\n  }\n  \n  markdown += '\\n### Strategy\\n\\n';\n  markdown += '- **Target Audience:** ' + (o.target_audience || 'N/A') + '\\n';\n  markdown += '- **Book Angle:** ' + (o.book_angle || 'N/A') + '\\n';\n  markdown += '- **Status:** ' + (o.status || 'N/A') + '\\n\\n';\n  markdown += '---\\n\\n';\n});\n\nmarkdown += '\\n*Market data extracted from live Amazon search results.*\\n';\n\nconst fileName = 'opportunities_' + timestamp + '.md';\nconst filePath = 'books/research/' + fileName;\n\nreturn {\n  json: {\n    file_path: filePath,\n    file_name: fileName,\n    markdown_content: markdown,\n    opportunities_count: allOpportunities.length,\n    timestamp: timestamp,\n    skip: false\n  }\n};"
+      },
+      "id": "8",
+      "name": "Compile Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.skip }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "id": "9",
+      "name": "Skip If Empty",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "create",
+        "owner": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "repository": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "filePath": "={{ $json.file_path }}",
+        "fileContent": "={{ $json.markdown_content }}",
+        "commitMessage": "=Add REAL niche research: {{ $json.opportunities_count }} opportunity(s)",
+        "additionalParameters": {}
+      },
+      "id": "10",
+      "name": "Commit to GitHub",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [2220, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {"main": [[{"node": "Create Niche List (EDIT THIS)", "type": "main", "index": 0}]]},
+    "Create Niche List (EDIT THIS)": {"main": [[{"node": "Fetch Amazon Page", "type": "main", "index": 0}]]},
+    "Fetch Amazon Page": {"main": [[{"node": "Extract REAL Data (Full Scan)", "type": "main", "index": 0}]]},
+    "Extract REAL Data (Full Scan)": {"main": [[{"node": "Filter Golden Opportunities", "type": "main", "index": 0}]]},
+    "Filter Golden Opportunities": {"main": [[{"node": "Calculate Metrics", "type": "main", "index": 0}]]},
+    "Calculate Metrics": {"main": [[{"node": "Filter ROI 400%+", "type": "main", "index": 0}]]},
+    "Filter ROI 400%+": {"main": [[{"node": "Compile Report", "type": "main", "index": 0}]]},
+    "Compile Report": {"main": [[{"node": "Skip If Empty", "type": "main", "index": 0}]]},
+    "Skip If Empty": {"main": [[{"node": "Commit to GitHub", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"}
+}
