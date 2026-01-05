@@ -1,0 +1,449 @@
+{
+  "name": "Autonomous Ghostwriter Pipeline (Reedsy-Level)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "filePath": "=books/manuscripts/{{ $json.input_filename }}",
+        "options": {}
+      },
+      "id": "2",
+      "name": "Load Manuscript",
+      "type": "n8n-nodes-base.readFile",
+      "typeVersion": 1,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Configuration\nconst input_filename = '2026-01-04T08-32-49_fiction.txt';\nconst target_word_count = 47000;\nconst book_id = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);\n\n// Known issues from editorial assessment\nconst known_issues = [\n  'CHAPTER undefined numbering bug',\n  'Chapters too short (avg 1507 words, target 2000-2500)',\n  'Rushed middle (Ch 6-10)',\n  'Purple prose (tapestry of, eyes locked, weight of)',\n  'Telling vs showing',\n  'Weak villain depth (Seraphina)',\n  'Underused supporting character (Gideon)',\n  'Unclear curse stakes (consume them is vague)',\n  'Tome plotline loses focus',\n  'Convenient solutions',\n  'Repetitive phrasing'\n];\n\nreturn {\n  json: {\n    input_filename: input_filename,\n    book_id: book_id,\n    target_word_count: target_word_count,\n    known_issues: known_issues\n  }\n};"
+      },
+      "id": "3",
+      "name": "Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'gpt-4o',\n  messages: [\n    {\n      role: 'system',\n      content: $('PROMPT: Master Planner').first().json.system_prompt\n    },\n    {\n      role: 'user',\n      content: 'MANUSCRIPT:\\n\\n' + $('Load Manuscript').first().json.data + '\\n\\nKNOWN ISSUES:\\n' + $json.known_issues.join('\\n') + '\\n\\nCurrent word count: ' + $('Load Manuscript').first().json.data.split(/\\\\s+/).length + '\\nTarget word count: ' + $json.target_word_count + '\\n\\nGenerate the improvement plan in JSON format.'\n    }\n  ],\n  temperature: 0.7,\n  max_tokens: 4000\n} }}",
+        "options": {}
+      },
+      "id": "4",
+      "name": "PHASE 1: Master Planner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const plannerResponse = $input.item.json.choices[0].message.content;\nconst manuscript = $('Load Manuscript').first().json.data;\n\n// Parse JSON from response\nlet improvementPlan;\ntry {\n  // Try to extract JSON from markdown code blocks if present\n  const jsonMatch = plannerResponse.match(/```json\\n([\\\\s\\\\S]*?)\\n```/) || plannerResponse.match(/```\\n([\\\\s\\\\S]*?)\\n```/);\n  if (jsonMatch) {\n    improvementPlan = JSON.parse(jsonMatch[1]);\n  } else {\n    improvementPlan = JSON.parse(plannerResponse);\n  }\n} catch (e) {\n  console.error('Failed to parse improvement plan:', e);\n  improvementPlan = { error: 'Parse failed', raw: plannerResponse };\n}\n\nconsole.log('📋 Master Plan Generated');\nconsole.log('Chapters to expand:', improvementPlan.expansion_plan?.chapters_to_expand?.length || 0);\nconsole.log('New chapters to write:', improvementPlan.expansion_plan?.new_chapters?.length || 0);\nconsole.log('Sections to rewrite:', improvementPlan.rewrite_targets?.length || 0);\n\nreturn {\n  json: {\n    improvement_plan: improvementPlan,\n    manuscript: manuscript,\n    book_id: $('Configuration').first().json.book_id\n  }\n};"
+      },
+      "id": "5",
+      "name": "Parse Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse manuscript into existing 15 chapters for analysis\nconst plan = $input.item.json.improvement_plan;\nconst manuscript = $input.item.json.manuscript;\nconst chapters = manuscript.split(/CHAPTER (?:undefined|\\d+)/gi).filter(c => c.trim().length > 100);\n\nconsole.log(`📊 Found ${chapters.length} existing chapters in manuscript`);\n\nif (chapters.length !== 15) {\n  console.warn(`⚠️  Expected 15 chapters, found ${chapters.length}`);\n}\n\nconst expansionItems = [];\n\n// Add chapter expansions (Master Planner identifies which of 15 existing chapters need expansion)\nif (plan.expansion_plan?.chapters_to_expand) {\n  plan.expansion_plan.chapters_to_expand.forEach(exp => {\n    const chapterNum = exp.chapter;\n    const chapterText = chapters[chapterNum - 1] || '';\n    const wordCount = chapterText.split(/\\s+/).length;\n    \n    console.log(`  Chapter ${chapterNum}: ${wordCount} words → target ${exp.target_words} words (+${exp.estimated_words})`);\n    \n    expansionItems.push({\n      json: {\n        type: 'expand_chapter',\n        chapter_number: chapterNum,\n        current_text: chapterText,\n        current_word_count: wordCount,\n        expansion_method: exp.expansion_method,\n        scene_outline: exp.scene_outline,\n        placement: exp.placement,\n        target_words: exp.estimated_words,\n        manuscript: manuscript\n      }\n    });\n  });\n}\n\n// Add new chapters (villain POV chapter 8.5, etc.)\nif (plan.expansion_plan?.new_chapters) {\n  plan.expansion_plan.new_chapters.forEach(newCh => {\n    console.log(`  NEW Chapter ${newCh.chapter}: ${newCh.target_words} words (${newCh.character} POV)`);\n    \n    expansionItems.push({\n      json: {\n        type: 'new_chapter',\n        chapter_number: newCh.chapter,\n        character: newCh.character,\n        purpose: newCh.purpose,\n        target_words: newCh.target_words,\n        key_reveals: newCh.key_reveals,\n        manuscript: manuscript\n      }\n    });\n  });\n}\n\nconsole.log(`\\n🔄 Created ${expansionItems.length} expansion tasks`);\nconsole.log(`📈 Target: ${plan.diagnostic_summary.current_word_count} → ${plan.diagnostic_summary.target_word_count} words`);\n\nreturn expansionItems;"
+      },
+      "id": "6",
+      "name": "Create Expansion Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "7",
+      "name": "PHASE 2: Expansion Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'gpt-4o',\n  messages: [\n    {\n      role: 'system',\n      content: $('PROMPT: Scene Writer').first().json.system_prompt\n    },\n    {\n      role: 'user',\n      content: 'TASK: ' + $json.type + '\\n\\nCHAPTER NUMBER: ' + $json.chapter_number + '\\n\\nSCENE OUTLINE: ' + ($json.scene_outline || 'See purpose and key_reveals') + '\\n\\nPLACEMENT: ' + ($json.placement || 'New standalone chapter') + '\\n\\nTARGET WORDS: ' + $json.target_words + '\\n\\nCONTEXT (surrounding text):\\n' + ($json.current_text ? $json.current_text.substring(0, 1000) : 'New chapter - no surrounding context') + '\\n\\nCHARACTER: ' + ($json.character || 'Multiple') + '\\n\\nPURPOSE: ' + ($json.purpose || 'Expand thin chapter') + '\\n\\nKEY REVEALS: ' + ($json.key_reveals ? $json.key_reveals.join('; ') : 'None specified') + '\\n\\nWrite the scene in full prose. Follow all style constraints. Match existing voice.'\n    }\n  ],\n  temperature: 0.9,\n  max_tokens: 2500\n} }}",
+        "options": {}
+      },
+      "id": "8",
+      "name": "Scene Writer AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const newScene = $input.item.json.choices[0].message.content;\nconst taskData = $('PHASE 2: Expansion Loop').item.json;\nconst wordCount = newScene.split(/\\\\s+/).length;\n\nconsole.log(`✍️  Chapter ${taskData.chapter_number} ${taskData.type} completed: ${wordCount} words`);\n\nreturn {\n  json: {\n    chapter_number: taskData.chapter_number,\n    type: taskData.type,\n    new_content: newScene,\n    word_count: wordCount,\n    placement: taskData.placement\n  }\n};"
+      },
+      "id": "9",
+      "name": "Format New Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {},
+      "id": "10",
+      "name": "Loop Back",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile all expansions and insert into manuscript\nconst allExpansions = $input.all();\nlet manuscript = $('Parse Plan').first().json.manuscript;\n\nconsole.log(`\\n📚 Compiling ${allExpansions.length} new scenes into manuscript`);\n\n// Sort by chapter number\nconst sorted = allExpansions.sort((a, b) => {\n  const aNum = parseFloat(a.json.chapter_number);\n  const bNum = parseFloat(b.json.chapter_number);\n  return aNum - bNum;\n});\n\n// Insert new content\n// This is a simplified insertion - in production you'd need more sophisticated logic\nconst chapters = manuscript.split(/CHAPTER undefined/gi);\nlet newManuscript = '';\n\nsorted.forEach((exp, idx) => {\n  const chNum = Math.floor(parseFloat(exp.json.chapter_number));\n  \n  if (exp.json.type === 'new_chapter') {\n    // Insert as new chapter\n    console.log(`  + Inserting new Chapter ${exp.json.chapter_number}`);\n    if (chNum <= chapters.length) {\n      chapters.splice(chNum, 0, '\\n\\n' + exp.json.new_content + '\\n\\n');\n    }\n  } else if (exp.json.type === 'expand_chapter') {\n    // Expand existing chapter\n    console.log(`  + Expanding Chapter ${exp.json.chapter_number}`);\n    if (chNum > 0 && chNum <= chapters.length) {\n      // Simple append for now - in production, use placement logic\n      chapters[chNum - 1] = chapters[chNum - 1] + '\\n\\n' + exp.json.new_content;\n    }\n  }\n});\n\n// Reassemble with proper chapter headers\nchapters.forEach((ch, idx) => {\n  if (ch.trim().length > 0) {\n    newManuscript += `\\n\\nCHAPTER ${idx + 1}\\n\\n` + ch.trim();\n  }\n});\n\nconst newWordCount = newManuscript.split(/\\\\s+/).length;\nconsole.log(`📊 Expanded manuscript: ${newWordCount} words`);\n\nreturn {\n  json: {\n    manuscript_expanded: newManuscript,\n    word_count: newWordCount,\n    expansions_applied: allExpansions.length,\n    book_id: $('Parse Plan').first().json.book_id\n  }\n};"
+      },
+      "id": "11",
+      "name": "Compile Expanded Manuscript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split manuscript into chapters for line editing\nconst manuscript = $input.item.json.manuscript_expanded;\nconst chapters = manuscript.split(/CHAPTER \\\\d+/gi).filter(c => c.trim().length > 100);\n\nconst chapterItems = chapters.map((ch, idx) => ({\n  json: {\n    chapter_number: idx + 1,\n    chapter_text: ch.trim(),\n    kill_list: [\n      'tapestry of',\n      'eyes locked',\n      'eyes met',\n      'the weight of',\n      'seemed to',\n      'felt like',\n      'a mixture of',\n      'a blend of'\n    ]\n  }\n}));\n\nconsole.log(`\\n✂️  Preparing ${chapterItems.length} chapters for line editing`);\n\nreturn chapterItems;"
+      },
+      "id": "12",
+      "name": "Prepare Line Edit Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 500]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "13",
+      "name": "PHASE 3: Line Edit Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [2220, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'gpt-4o',\n  messages: [\n    {\n      role: 'system',\n      content: $('PROMPT: Line Polish').first().json.system_prompt\n    },\n    {\n      role: 'user',\n      content: 'CHAPTER ' + $json.chapter_number + ':\\n\\n' + $json.chapter_text + '\\n\\nKILL-LIST (remove/replace these phrases):\\n' + $json.kill_list.join('\\n') + '\\n\\nPolish this chapter. Remove purple prose, execute kill-list, tighten dialogue tags, show don\\\\'t tell.'\n    }\n  ],\n  temperature: 0.7,\n  max_tokens: 3000\n} }}",
+        "options": {}
+      },
+      "id": "14",
+      "name": "Line Editor AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2440, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const editedChapter = $input.item.json.choices[0].message.content;\nconst chapterNum = $('PHASE 3: Line Edit Loop').item.json.chapter_number;\n\nconsole.log(`✨ Chapter ${chapterNum} line edited`);\n\nreturn {\n  json: {\n    chapter_number: chapterNum,\n    edited_text: editedChapter\n  }\n};"
+      },
+      "id": "15",
+      "name": "Store Edited Chapter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 400]
+    },
+    {
+      "parameters": {},
+      "id": "16",
+      "name": "Loop Back Line Edit",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2880, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile line-edited manuscript\nconst allChapters = $input.all();\nconst sorted = allChapters.sort((a, b) => a.json.chapter_number - b.json.chapter_number);\n\nlet finalManuscript = 'A forbidden romance between a\\nA Romance/Fantasy (Romantasy) Novel\\n\\n';\nfinalManuscript += '═══════════════════════════════════════\\n\\n';\nfinalManuscript += '⚠️ AI GENERATED - REQUIRES BETA TESTING\\n\\n';\nfinalManuscript += '═══════════════════════════════════════\\n\\n';\n\nsorted.forEach(ch => {\n  finalManuscript += `\\n\\nCHAPTER ${ch.json.chapter_number}\\n\\n`;\n  finalManuscript += ch.json.edited_text.trim();\n  finalManuscript += '\\n\\n';\n});\n\nconst finalWordCount = finalManuscript.split(/\\\\s+/).length;\n\nconsole.log(`\\n📖 Line editing complete: ${finalWordCount} words`);\n\nreturn {\n  json: {\n    manuscript_line_edited: finalManuscript,\n    word_count: finalWordCount,\n    book_id: $('Compile Expanded Manuscript').first().json.book_id\n  }\n};"
+      },
+      "id": "17",
+      "name": "Compile Line-Edited Manuscript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2440, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'gpt-4o',\n  messages: [\n    {\n      role: 'system',\n      content: $('PROMPT: Consistency Validator').first().json.system_prompt\n    },\n    {\n      role: 'user',\n      content: 'MANUSCRIPT:\\n\\n' + $json.manuscript_line_edited + '\\n\\nCheck for continuity errors, magic consistency, character attribute consistency, timeline logic. Output JSON with error report.'\n    }\n  ],\n  temperature: 0.5,\n  max_tokens: 2000\n} }}",
+        "options": {}
+      },
+      "id": "18",
+      "name": "PHASE 4: Consistency Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2660, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const qaResponse = $input.item.json.choices[0].message.content;\nconst manuscript = $('Compile Line-Edited Manuscript').first().json.manuscript_line_edited;\n\nlet qaReport;\ntry {\n  const jsonMatch = qaResponse.match(/```json\\n([\\\\s\\\\S]*?)\\n```/) || qaResponse.match(/```\\n([\\\\s\\\\S]*?)\\n```/);\n  qaReport = jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(qaResponse);\n} catch (e) {\n  qaReport = { raw: qaResponse, parsed: false };\n}\n\nconst p1Errors = qaReport.errors?.filter(e => e.severity === 'P1').length || 0;\nconst p2Errors = qaReport.errors?.filter(e => e.severity === 'P2').length || 0;\n\nconsole.log(`\\n🔍 QA Report:`);\nconsole.log(`  P1 Errors (Critical): ${p1Errors}`);\nconsole.log(`  P2 Errors (Moderate): ${p2Errors}`);\n\nreturn {\n  json: {\n    qa_report: qaReport,\n    manuscript: manuscript,\n    p1_errors: p1Errors,\n    p2_errors: p2Errors,\n    book_id: $('Compile Line-Edited Manuscript').first().json.book_id\n  }\n};"
+      },
+      "id": "19",
+      "name": "Parse QA Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2880, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'gpt-4o',\n  messages: [\n    {\n      role: 'system',\n      content: $('PROMPT: Self-Critic').first().json.system_prompt\n    },\n    {\n      role: 'user',\n      content: 'MANUSCRIPT (first 3 chapters + last 2 chapters for review):\\n\\n' + $json.manuscript.split('CHAPTER').slice(0, 4).join('CHAPTER') + '\\n\\n[... middle chapters omitted for brevity ...]\\n\\n' + $json.manuscript.split('CHAPTER').slice(-3).join('CHAPTER') + '\\n\\nWORD COUNT: ' + $json.manuscript.split(/\\\\s+/).length + '\\n\\nQA REPORT:\\n' + JSON.stringify($json.qa_report, null, 2) + '\\n\\nReview this AI-generated manuscript. Score each category 1-10. Be HARSH.'\n    }\n  ],\n  temperature: 0.6,\n  max_tokens: 1500\n} }}",
+        "options": {}
+      },
+      "id": "20",
+      "name": "PHASE 5: Self-Critic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3100, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "const criticResponse = $input.item.json.choices[0].message.content;\nconst manuscript = $('Parse QA Report').first().json.manuscript;\n\nlet criticReport;\ntry {\n  const jsonMatch = criticResponse.match(/```json\\n([\\\\s\\\\S]*?)\\n```/) || criticResponse.match(/```\\n([\\\\s\\\\S]*?)\\n```/);\n  criticReport = jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(criticResponse);\n} catch (e) {\n  criticReport = { raw: criticResponse, parsed: false };\n}\n\nconst scores = criticReport.scores || {};\nconst lowestScore = Math.min(...Object.values(scores).filter(v => typeof v === 'number'));\nconst avgScore = Object.values(scores).filter(v => typeof v === 'number').reduce((a, b) => a + b, 0) / Object.values(scores).filter(v => typeof v === 'number').length;\n\nconst revisionNeeded = criticReport.revision_needed || lowestScore < 7 || avgScore < 7.5;\n\nconsole.log(`\\n🎯 Self-Critic Results:`);\nconsole.log(`  Average Score: ${avgScore.toFixed(1)}/10`);\nconsole.log(`  Lowest Score: ${lowestScore}/10`);\nconsole.log(`  Revision Needed: ${revisionNeeded ? 'YES ⚠️' : 'NO ✅'}`);\n\nif (!revisionNeeded) {\n  console.log(`\\n✅ MANUSCRIPT APPROVED FOR PUBLICATION!`);\n}\n\nreturn {\n  json: {\n    critic_report: criticReport,\n    manuscript_final: manuscript,\n    revision_needed: revisionNeeded,\n    average_score: avgScore,\n    lowest_score: lowestScore,\n    book_id: $('Parse QA Report').first().json.book_id,\n    word_count: manuscript.split(/\\\\s+/).length\n  }\n};"
+      },
+      "id": "21",
+      "name": "Evaluate Scores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3320, 600]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.revision_needed }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "id": "22",
+      "name": "Quality Gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [3540, 600]
+    },
+    {
+      "parameters": {
+        "filePath": "=books/manuscripts/{{ $json.book_id }}_FINAL.txt",
+        "fileContent": "={{ $json.manuscript_final }}",
+        "options": {}
+      },
+      "id": "23",
+      "name": "Save Final Manuscript",
+      "type": "n8n-nodes-base.writeFile",
+      "typeVersion": 1,
+      "position": [3760, 500]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "create",
+        "owner": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "repository": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "filePath": "=books/manuscripts/{{ $json.book_id }}_FINAL.txt",
+        "fileContent": "={{ $json.manuscript_final }}",
+        "commitMessage": "=Autonomous ghostwriting complete: {{ $json.word_count }} words (Score: {{ $json.average_score.toFixed(1) }}/10)",
+        "additionalParameters": {}
+      },
+      "id": "24",
+      "name": "Commit to GitHub",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [3980, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "console.log('\\n❌ REVISION NEEDED - Scores too low');\nconsole.log('Manuscript requires human review or additional iteration.');\nconsole.log('\\nOptions:');\nconsole.log('1. Review critic report and manually fix issues');\nconsole.log('2. Run workflow again with adjusted prompts');\nconsole.log('3. Send to human ghostwriter');\n\nreturn {\n  json: {\n    status: 'FAILED_QA',\n    message: 'Manuscript did not pass self-critic review',\n    critic_report: $json.critic_report,\n    average_score: $json.average_score,\n    book_id: $json.book_id\n  }\n};"
+      },
+      "id": "25",
+      "name": "Revision Needed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3760, 700]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Master Planner\nconst system_prompt = `You are a Master Planner for fiction ghostwriting automation. Analyze the manuscript and create a detailed improvement plan that other AI agents will execute WITHOUT human approval.\n\n⚠️ CRITICAL: This manuscript ALREADY HAS 15 CHAPTERS (approximately 22,601 words).\n\nYour job is to EXPAND existing chapters and ADD 1 new chapter, NOT create chapters from scratch.\n\nANALYSIS FRAMEWORK:\n1. Identify which of the 15 existing chapters are too thin (< 1,800 words)\n2. Identify structural weaknesses (rushed pacing, unclear stakes)\n3. Identify prose issues (purple prose, telling vs showing, repetitive phrases)\n4. Identify continuity issues (timeline, magic rules, character consistency)\n5. Calculate exact word additions needed: Current 22.6K + Expansions + 1 new chapter = Target 47K\n\nOUTPUT REQUIREMENTS:\n- Must be valid JSON\n- Be SPECIFIC about what to write (not just \"improve X\")\n- Provide scene outlines with 5-7 bullet points\n- Specify exact placement (after which paragraph/scene)\n- Include character emotional states and relationship status\n\nJSON SCHEMA:\n{\n  \"diagnostic_summary\": {\n    \"structural_issues\": [\"issue 1\", \"issue 2\"],\n    \"prose_issues\": [\"issue 1\", \"issue 2\"],\n    \"consistency_issues\": [\"issue 1\", \"issue 2\"],\n    \"current_word_count\": 22600,\n    \"target_word_count\": 47000\n  },\n  \"expansion_plan\": {\n    \"chapters_to_expand\": [\n      {\n        \"chapter\": 6,\n        \"current_words\": 1500,\n        \"target_words\": 2800,\n        \"expansion_method\": \"insert_new_scene\",\n        \"scene_outline\": \"Detailed 5-7 bullet outline of what happens\",\n        \"placement\": \"after_seer_meeting\",\n        \"estimated_words\": 1300\n      }\n    ],\n    \"new_chapters\": [\n      {\n        \"chapter\": \"8.5\",\n        \"type\": \"villain_pov\",\n        \"character\": \"Seraphina\",\n        \"purpose\": \"Add moral complexity and backstory\",\n        \"target_words\": 1400,\n        \"key_reveals\": [\"reveal 1\", \"reveal 2\", \"reveal 3\"]\n      }\n    ]\n  },\n  \"rewrite_targets\": [\n    {\n      \"location\": \"Chapter 10, paragraph 3\",\n      \"issue\": \"Gideon disappears with no explanation\",\n      \"solution\": \"Add scene in Ch 9 where Gideon discovers ward weakness\"\n    }\n  ],\n  \"prose_priorities\": {\n    \"kill_list_targets\": [\"tapestry of\", \"eyes locked\"],\n    \"chapters_needing_heavy_line_edit\": [1, 3, 6],\n    \"telling_to_showing_conversions\": 35\n  }\n}\n\nCRITICAL: Focus on the MIDDLE of the manuscript (Ch 6-10). That's where most expansion is needed.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "26",
+      "name": "PROMPT: Master Planner",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Scene Writer\nconst system_prompt = `You are an expert Romantasy ghostwriter. Write new scenes that expand manuscripts to publication length.\n\n❌ ABSOLUTELY FORBIDDEN:\n- Generic openings (\"The sun rose over...\", \"The air was thick with...\")\n- Metaphor chains (max 1 per paragraph)\n- Filter words without immediate action (\"seemed\", \"appeared\", \"felt\")\n- Explaining emotions (\"She felt nervous\" → show via action)\n- Purple prose (\"tapestry\", \"symphony\", \"dance\" unless literal)\n- Info dumps (weave backstory into action/dialogue)\n- Starting scenes with weather or character waking up\n- Abstract emotion descriptions (\"mixture of hope and fear\")\n\n✅ MANDATORY REQUIREMENTS:\n- Start scenes mid-action or with dialogue\n- Show emotion through body language, action, dialogue subtext\n- Vary sentence rhythm (mix 5-word and 20-word sentences)\n- Character-specific voices:\n  * Elara = pragmatic, curious, direct\n  * Caelum = witty, vulnerable beneath confidence, teasing\n  * Gideon = steady, protective, selfless\n  * Seraphina = calculating, elegant, believes she's justified\n- Concrete sensory details (\"jasmine and copper\" not \"intoxicating scents\")\n- Conflict or tension in EVERY scene\n- Scenes must advance: plot OR character OR relationship\n\nROMANTASY GENRE BEATS:\n- Banter with romantic tension (charged but not explicit)\n- Push-pull dynamic (not instant attraction)\n- Forced proximity moments (curse creates opportunities)\n- Emotional vulnerability earned through crisis\n- Action-to-introspection ratio: 60/40\n\nWRITING PROCESS:\n1. Review context - match existing tone and voice\n2. Plan 3-5 scene beats (turning points)\n3. Write focusing on CLARITY and CHARACTER first\n4. Self-edit for forbidden patterns\n5. Check: Does this sound like the existing chapters?\n\nEXAMPLE - GOOD VS BAD:\n\n❌ BAD (AI voice):\n\"The morning sun painted the forest in hues of gold and amber, a tapestry of light and shadow that seemed to breathe with ancient magic. Elara felt a mixture of hope and trepidation as she approached the clearing where the seer had spoken to them. Her heart pounded with anticipation.\"\n\n✅ GOOD (Reedsy quality):\n\"Elara knelt in the clearing, her mother's tome open to a page she'd avoided for weeks. The ritual circle she'd scratched in the dirt looked pathetic—desperate. She'd seen better alchemy from apprentices.\n\n'This is a terrible idea,' Caelum said from the tree line.\n\n'Noted.' She uncorked the vial of quicksilver. It pooled in her palm, cold and alive.\"\n\nNOW WRITE THE REQUESTED SCENE. Match the existing manuscript voice. Be specific and grounded.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "27",
+      "name": "PROMPT: Scene Writer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Line Polish\nconst system_prompt = `You are a line editor specializing in commercial Romantasy fiction. Polish prose to professional standards WITHOUT changing plot.\n\nYOUR ONLY JOB: Fix how things are said, not what is said.\n\nEXECUTE KILL-LIST:\n- \"tapestry of [X]\" → 70% removal. Replace with: concrete nouns, \"web of\", \"maze of\", or restructure\n- \"eyes locked/met\" → 80% removal. Replace with action beats showing the moment\n- \"the weight of [X]\" → 60% removal. Replace with physical sensation or action\n- \"seemed to\" → 90% removal. Convert to direct statement\n- \"felt [emotion]\" → 85% removal. Show via action/body language\n- \"a mixture/blend of\" → 75% removal. Pick one emotion or show both separately\n\nPURPLE PROSE REDUCTION:\n- Max 1 metaphor per paragraph\n- Cut adjective stacking (\"shimmering, ethereal, luminescent\")\n- Remove obvious descriptions (\"deafening silence\", \"blinding light\")\n- Trust reader (don't explain what metaphors mean)\n\nDIALOGUE TAG RULES:\n- Use \"said\"/\"asked\" 80% of the time\n- Action beat OR tag, not both: ❌ \"'I know,' she said, nodding.\" → ✅ \"'I know.' She nodded.\"\n- Remove adverbs: ❌ \"she said softly\" → ✅ \"she said\" (let dialogue convey tone)\n- Cut creative tags: ❌ \"she breathed\" → ✅ \"she said\"\n\nTELLING → SHOWING:\n❌ \"She felt nervous about the confrontation.\"\n✅ \"Her hands trembled as she reached for the door.\"\n\n❌ \"He was angry but trying to hide it.\"\n✅ \"His jaw tightened. 'Fine.' The word came out flat.\"\n\nSENTENCE VARIETY:\n- Mix short (5-8 words) with flowing (18-25 words)\n- Vary structure: statement, question, fragment for emphasis\n- Read aloud mentally - fix awkward rhythm\n\nPRESERVE:\n- Character voice (Elara ≠ Caelum ≠ Gideon)\n- Banter patterns (don't flatten wit)\n- Plot points and decisions\n- Existing imagery (modify, don't replace)\n\nEXAMPLES:\n\nBEFORE: \"Their eyes locked across the crowded room, a connection that seemed to transcend words, speaking of futures unspoken and promises yet to be made.\"\nAFTER: \"She looked up. He was already watching. The room fell away.\"\n\nBEFORE: \"'I don't know,' she whispered, her voice fragile as spun glass, trembling with the weight of unspoken fears.\"\nAFTER: \"'I don't know.' Her voice barely rose above a whisper.\"\n\nBEFORE: \"The forest was a tapestry of emerald leaves and tangled vines, a symphony of life that seemed to pulse with ancient magic.\"\nAFTER: \"Vines choked the forest floor. Leaves rustled overhead, thick and alive with old magic.\"\n\nOUTPUT FORMAT:\nProvide the edited chapter text. At the end, include:\n\n## Edit Summary\n**Changes:** [number]\n**Word Count:** [before] → [after]\n**Kill-list Reduction:** [percentage]\n\n**Sample Changes (3-5 examples):**\nBEFORE: [...]\nAFTER: [...]\n\nNow edit the provided chapter.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "28",
+      "name": "PROMPT: Line Polish",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Consistency Validator\nconst system_prompt = `You are a continuity checker for fiction manuscripts. Find errors, flag contradictions, verify consistency.\n\nYOUR JOB: Catch mistakes that break reader immersion. Be thorough but not pedantic.\n\nCHECK CATEGORIES:\n\n1. TIMELINE VALIDATION\n- Day/night progression logical?\n- Travel times reasonable? (Can they get from forest to court in stated time?)\n- Seasons/weather consistent?\n- How much time passes between chapters?\n\n2. MAGIC SYSTEM CONSISTENCY\n- Elara's alchemy: What can she do? Limits? Cost?\n- Caelum's Fae magic: Changes when cursed vs not?\n- Curse mechanics: Same symptoms throughout?\n- No power scaling violations (sudden new abilities)\n\n3. CHARACTER ATTRIBUTES\n- Physical descriptions (eye color, hair, height)\n- Personality (would this character say/do this?)\n- Skills/knowledge (sudden expertise?)\n- Relationships (who knows what about whom?)\n\n4. LOCATION LOGIC\n- Geography makes sense?\n- Travel routes consistent?\n- Scene settings clear (interior/exterior, time of day)?\n\n5. PLOT CONTINUITY\n- Setup → payoff (Chekhov's gun)\n- Information flow (who learned what when?)\n- Objects/artifacts tracked (tome from Ch 1?)\n\nERROR SEVERITY:\n- P1 (Critical): Plot contradiction, makes no sense\n- P2 (Moderate): Confusing, might trip readers\n- P3 (Low): Minor, only detail-oriented readers notice\n\nAUTO-FIX IF OBVIOUS:\n- Chapter numbering\n- Typos\n- Dialogue punctuation\n- Formatting\n\nOUTPUT JSON:\n{\n  \"errors\": [\n    {\n      \"severity\": \"P1\",\n      \"category\": \"plot_continuity\",\n      \"location\": \"Chapter 7, paragraph 12\",\n      \"issue\": \"Elara uses tome that was destroyed in Chapter 4\",\n      \"fix_suggestion\": \"Remove reference or add scene in Ch 5 where she recovers it\"\n    }\n  ],\n  \"auto_fixes_applied\": 12,\n  \"continuity_database\": {\n    \"elara\": {\"eyes\": \"amber\", \"hair\": \"auburn\", \"age\": \"~24\"},\n    \"caelum\": {\"eyes\": \"sapphire blue\", \"hair\": \"silver\", \"appearance\": \"ethereal\"},\n    \"timeline\": \"Story spans 8 days total\",\n    \"magic_rules\": \"Elara can manipulate metals within 10 feet, requires concentration\"\n  },\n  \"summary\": {\n    \"p1_errors\": 0,\n    \"p2_errors\": 3,\n    \"p3_errors\": 7,\n    \"overall_consistency\": \"GOOD\"\n  }\n}\n\nBe thorough. Readers notice these things.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "29",
+      "name": "PROMPT: Consistency Validator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Self-Critic\nconst system_prompt = `You are a quality control reviewer. You are reviewing a manuscript that was autonomously expanded and edited by AI.\n\nYOUR JOB: Be BRUTALLY HONEST. Better to catch issues now than in Amazon reviews.\n\nSCORING RUBRIC (1-10 for each):\n\n1. AI_VOICE_DETECTED (higher = less AI voice)\n- 10: Reads like human-written pro fiction\n- 7-9: Mostly natural, few AI tells\n- 4-6: Noticeable AI patterns (metaphor soup, generic openings)\n- 1-3: Screams \"AI wrote this\"\n\nRed flags: \"tapestry of\", starting with weather, explaining emotions\n\n2. CHARACTER_DISTINCTION (can you tell who's speaking?)\n- 10: Each character has unique voice\n- 7-9: Distinct voices, minor overlap\n- 4-6: Dialogue somewhat interchangeable\n- 1-3: All characters sound the same\n\n3. PACING\n- 10: Perfect rhythm, no drag or rush\n- 7-9: Mostly good, minor issues\n- 4-6: Some sections drag or feel rushed\n- 1-3: Seriously uneven pacing\n\n4. STAKES_CLARITY (does reader know what's at risk?)\n- 10: Crystal clear what failure means\n- 7-9: Mostly clear, could be more specific\n- 4-6: Vague stakes (\"bad things happen\")\n- 1-3: No idea what's actually at risk\n\n5. ROMANCE_SATISFACTION\n- 10: Tension builds perfectly, payoff earned\n- 7-9: Good arc, minor missed beats\n- 4-6: Rushed or insufficient buildup\n- 1-3: Unsatisfying or no chemistry\n\n6. PLOT_COMPLETENESS\n- 10: All threads tied, no holes\n- 7-9: Minor loose ends\n- 4-6: Some threads dropped or unresolved\n- 1-3: Major plot holes\n\n7. GENRE_FIT (Romantasy expectations)\n- 10: Nails all genre beats\n- 7-9: Hits most tropes well\n- 4-6: Missing some key elements\n- 1-3: Doesn't feel like Romantasy\n\nExpected: forbidden romance, magical binding, Fae court, strong FMC, enemies-to-lovers, HEA/HFN\n\nPASS/FAIL CRITERIA:\n- ALL categories ≥ 7 → PASS\n- ANY category < 7 → FAIL, revision needed\n- Average < 7.5 → FAIL\n\nOUTPUT JSON:\n{\n  \"scores\": {\n    \"ai_voice_detected\": 8,\n    \"character_distinction\": 7,\n    \"pacing\": 9,\n    \"stakes_clarity\": 8,\n    \"romance_satisfaction\": 7,\n    \"plot_completeness\": 9,\n    \"genre_fit\": 8\n  },\n  \"overall\": \"PASS\",\n  \"average_score\": 8.0,\n  \"revision_needed\": false,\n  \"notes\": \"Minor AI voice in Chapter 3 opening. Romance could be 10% more charged in Chapters 11-12. Otherwise publication-ready.\",\n  \"specific_issues\": [\n    \"Chapter 3: Opens with 'The morning sun...' - too generic\",\n    \"Chapter 11: Romantic tension peaks too early, fizzles by Chapter 13\"\n  ],\n  \"strengths\": [\n    \"Character banter is excellent\",\n    \"Magic system clear and consistent\",\n    \"Villain has proper depth\"\n  ]\n}\n\nBe harsh. This determines if we publish or iterate.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "30",
+      "name": "PROMPT: Self-Critic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 200]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [[{"node": "Load Manuscript"}]]
+    },
+    "Load Manuscript": {
+      "main": [[{"node": "Configuration"}]]
+    },
+    "Configuration": {
+      "main": [[{"node": "PHASE 1: Master Planner"}]]
+    },
+    "PHASE 1: Master Planner": {
+      "main": [[{"node": "Parse Plan"}]]
+    },
+    "Parse Plan": {
+      "main": [[{"node": "Create Expansion Tasks"}]]
+    },
+    "Create Expansion Tasks": {
+      "main": [[{"node": "PHASE 2: Expansion Loop"}]]
+    },
+    "PHASE 2: Expansion Loop": {
+      "main": [
+        [{"node": "Scene Writer AI"}],
+        [{"node": "Compile Expanded Manuscript"}]
+      ]
+    },
+    "Scene Writer AI": {
+      "main": [[{"node": "Format New Content"}]]
+    },
+    "Format New Content": {
+      "main": [[{"node": "Loop Back"}]]
+    },
+    "Loop Back": {
+      "main": [[{"node": "PHASE 2: Expansion Loop"}]]
+    },
+    "Compile Expanded Manuscript": {
+      "main": [[{"node": "Prepare Line Edit Tasks"}]]
+    },
+    "Prepare Line Edit Tasks": {
+      "main": [[{"node": "PHASE 3: Line Edit Loop"}]]
+    },
+    "PHASE 3: Line Edit Loop": {
+      "main": [
+        [{"node": "Line Editor AI"}],
+        [{"node": "Compile Line-Edited Manuscript"}]
+      ]
+    },
+    "Line Editor AI": {
+      "main": [[{"node": "Store Edited Chapter"}]]
+    },
+    "Store Edited Chapter": {
+      "main": [[{"node": "Loop Back Line Edit"}]]
+    },
+    "Loop Back Line Edit": {
+      "main": [[{"node": "PHASE 3: Line Edit Loop"}]]
+    },
+    "Compile Line-Edited Manuscript": {
+      "main": [[{"node": "PHASE 4: Consistency Check"}]]
+    },
+    "PHASE 4: Consistency Check": {
+      "main": [[{"node": "Parse QA Report"}]]
+    },
+    "Parse QA Report": {
+      "main": [[{"node": "PHASE 5: Self-Critic"}]]
+    },
+    "PHASE 5: Self-Critic": {
+      "main": [[{"node": "Evaluate Scores"}]]
+    },
+    "Evaluate Scores": {
+      "main": [[{"node": "Quality Gate"}]]
+    },
+    "Quality Gate": {
+      "main": [
+        [{"node": "Save Final Manuscript"}],
+        [{"node": "Revision Needed"}]
+      ]
+    },
+    "Save Final Manuscript": {
+      "main": [[{"node": "Commit to GitHub"}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

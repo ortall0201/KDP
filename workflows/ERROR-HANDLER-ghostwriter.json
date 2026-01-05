@@ -1,0 +1,74 @@
+{
+  "name": "Ghostwriter Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "On Workflow Error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract error information from failed workflow\nconst error = $input.item.json;\n\nconst workflowName = error.workflow?.name || 'Autonomous Ghostwriter Pipeline';\nconst timestamp = new Date().toISOString();\nconst failedNode = error.node?.name || 'Unknown';\nconst errorMessage = error.error?.message || 'No error message';\nconst errorStack = error.error?.stack || 'No stack trace';\n\n// Try to extract book_id from execution data\nlet bookId = 'unknown';\ntry {\n  if (error.execution?.data) {\n    const configData = error.execution.data.resultData?.runData?.Configuration;\n    if (configData && configData[0]?.data?.main?.[0]?.[0]?.json?.book_id) {\n      bookId = configData[0].data.main[0][0].json.book_id;\n    }\n  }\n} catch (e) {\n  console.error('Failed to extract book_id:', e);\n}\n\nconst errorReport = {\n  alert_title: `🚨 ${workflowName} FAILED`,\n  workflow_name: workflowName,\n  workflow_id: error.workflow?.id || 'unknown',\n  execution_id: error.execution?.id || 'unknown',\n  failed_at_node: failedNode,\n  error_message: errorMessage,\n  error_stack: errorStack,\n  book_id: bookId,\n  timestamp: timestamp,\n  full_error: error\n};\n\nconsole.error('❌ Workflow Error Captured:');\nconsole.error(`   Node: ${failedNode}`);\nconsole.error(`   Error: ${errorMessage}`);\nconsole.error(`   Book ID: ${bookId}`);\n\nreturn {\n  json: errorReport\n};"
+      },
+      "id": "2",
+      "name": "Extract Error Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "filePath": "=logs/errors/{{ $json.book_id }}_{{ $json.timestamp.replace(/[:.]/g, '-') }}_error.json",
+        "fileContent": "={{ JSON.stringify($json, null, 2) }}",
+        "options": {}
+      },
+      "id": "3",
+      "name": "Log Error to File",
+      "type": "n8n-nodes-base.writeFile",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Create formatted error summary for notifications\nconst error = $input.item.json;\n\nconst summary = `🚨 GHOSTWRITER PIPELINE FAILED\n\n**Workflow:** ${error.workflow_name}\n**Failed At:** ${error.failed_at_node}\n**Book ID:** ${error.book_id}\n**Time:** ${new Date(error.timestamp).toLocaleString()}\n\n**Error:**\n${error.error_message}\n\n**Action Required:**\n1. Check error log: logs/errors/${error.book_id}_*_error.json\n2. Review failed node: ${error.failed_at_node}\n3. Fix issue and re-run workflow\n\n**Execution ID:** ${error.execution_id}`;\n\nreturn {\n  json: {\n    ...error,\n    notification_text: summary\n  }\n};"
+      },
+      "id": "4",
+      "name": "Format Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Console notification (always runs)\nconst notification = $input.item.json.notification_text;\n\nconsole.log('\\n' + '='.repeat(60));\nconsole.log(notification);\nconsole.log('='.repeat(60) + '\\n');\n\n// Return data for optional external notifications\nreturn {\n  json: {\n    ...$input.item.json,\n    notification_sent: true,\n    notification_method: 'console'\n  }\n};"
+      },
+      "id": "5",
+      "name": "Send Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 400]
+    }
+  ],
+  "connections": {
+    "On Workflow Error": {
+      "main": [[{"node": "Extract Error Info"}]]
+    },
+    "Extract Error Info": {
+      "main": [[{"node": "Log Error to File"}, {"node": "Format Notification"}]]
+    },
+    "Log Error to File": {
+      "main": [[{"node": "Send Notification"}]]
+    },
+    "Format Notification": {
+      "main": [[{"node": "Send Notification"}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "v1"
+}
