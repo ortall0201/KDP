@@ -202,6 +202,11 @@ crewai_ghostwriter/
 - [x] **Safety guards** (5 protection mechanisms)
 - [x] **WorkflowHealthMonitor** for diagnostics
 - [x] Comprehensive test suite
+- [x] **Week 4 Refinements:**
+  - **Global Story Contract** (coherence guardrails for parallel execution)
+  - 3 new tools: GetGlobalStoryContractTool, CheckRomancePacingTool, CheckMagicRevealTool
+  - QA → IssueTracker integration (failures enter editing loop)
+  - Agent integration (Scene Architect + QA use contract)
 - [ ] Crash recovery (future enhancement)
 
 ### Week 5-6: Testing (TODO)
