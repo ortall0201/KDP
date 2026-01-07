@@ -1,0 +1,1356 @@
+{
+  "name": "Autonomous Ghostwriter Pipeline (Production-Ready) - FIXED 2026-01-06T12:30:00",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "91205e11-1420-40d9-887b-38b4fd778ade",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "get",
+        "owner": {
+          "__rl": true,
+          "value": "ortall0201",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "KDP",
+          "mode": "list",
+          "cachedResultName": "KDP",
+          "cachedResultUrl": "https://github.com/ortall0201/KDP"
+        },
+        "filePath": "={{ $('Find Latest Manuscript').first().json.manuscript_path }}",
+        "additionalParameters": {}
+      },
+      "id": "5da5567a-a9cd-4692-b0e7-33b262a2ef67",
+      "name": "Load Manuscript",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [
+        64,
+        -208
+      ],
+      "webhookId": "ebbedec9-6fac-4fb5-924d-c6d730cad2b5",
+      "credentials": {
+        "githubApi": {
+          "id": "QNCYg9IjlKDIfIEy",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get manuscript content from GitHub node\nconst inputData = $input.first().json;\n\n// GitHub node can return content in different formats\nlet manuscript;\n\nif (inputData.data) {\n  // If data field exists, use it directly (already decoded)\n  manuscript = inputData.data;\n  console.log('ℹ️  Using direct data field from GitHub');\n} else if (inputData.content) {\n  // If content field exists, decode from base64\n  manuscript = Buffer.from(inputData.content, 'base64').toString('utf-8');\n  console.log('ℹ️  Decoded base64 content from GitHub');\n} else if ($input.first().binary && $input.first().binary.data) {\n  // Check if it came as binary data\n  const binaryBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n  manuscript = binaryBuffer.toString('utf-8');\n  console.log('ℹ️  Converted from binary data');\n} else {\n  // Debug: log what we actually received\n  console.log('GitHub node output:', JSON.stringify(inputData, null, 2));\n  throw new Error('Could not find manuscript content. Check GitHub node output format.');\n}\n\nif (!manuscript || manuscript.trim().length === 0) {\n  throw new Error('Manuscript content is empty');\n}\n\nconst wordCount = manuscript.split(/\\s+/).filter(w => w.length > 0).length;\nconsole.log(`ℹ️  Manuscript loaded: ${wordCount} words`);\n\nreturn {\n  json: {\n    data: manuscript,\n    filename: inputData.name || 'unknown',\n    path: inputData.path || 'unknown',\n    word_count: wordCount\n  }\n};"
+      },
+      "id": "decode-manuscript-001",
+      "name": "Decode Manuscript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Configuration\nconst target_word_count = 47000;\nconst book_id = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);\n\n// Known issues from editorial assessment\nconst known_issues = [\n  'CHAPTER undefined numbering bug',\n  'Chapters too short (avg 1507 words, target 2000-2500)',\n  'Rushed middle (Ch 6-10)',\n  'Purple prose (tapestry of, eyes locked, weight of)',\n  'Telling vs showing',\n  'Weak villain depth (Seraphina)',\n  'Underused supporting character (Gideon)',\n  'Unclear curse stakes (consume them is vague)',\n  'Tome plotline loses focus',\n  'Convenient solutions',\n  'Repetitive phrasing'\n];\n\nreturn {\n  json: {\n    book_id: book_id,\n    target_word_count: target_word_count,\n    known_issues: known_issues,\n    iteration: 0\n  }\n};"
+      },
+      "id": "bc463201-c010-4dd1-9b70-60345c4c124c",
+      "name": "Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -176,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $env.GITHUB_OWNER || 'ortall0201' }}/{{ $env.GITHUB_REPO || 'KDP' }}/contents/books/manuscripts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "options": {
+          "retry": {
+            "maxTries": 5,
+            "waitBetween": 1000,
+            "waitBeforeGiveUp": 30000
+          }
+        }
+      },
+      "id": "c4bb6b11-ecb9-42ee-9ee5-9b4d4bb27a21",
+      "name": "List Manuscripts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -656,
+        240
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "QNCYg9IjlKDIfIEy",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Find the latest manuscript file\nconst files = $input.all();\n\n// Filter for .txt files only\nconst txtFiles = files\n  .filter(item => item.json.name && item.json.name.endsWith('.txt'))\n  .map(item => ({\n    name: item.json.name,\n    path: item.json.path,\n    download_url: item.json.download_url,\n    // Extract timestamp from filename (format: 2026-01-04T08-32-49_fiction.txt)\n    timestamp: item.json.name.split('_')[0]\n  }));\n\nif (txtFiles.length === 0) {\n  throw new Error('No manuscript files found in books/manuscripts/');\n}\n\n// Sort by timestamp (newest first)\ntxtFiles.sort((a, b) => b.timestamp.localeCompare(a.timestamp));\n\nconst latestFile = txtFiles[0];\n\nconsole.log(`ℹ️  Found ${txtFiles.length} manuscript(s). Using latest: ${latestFile.name}`);\n\nreturn {\n  json: {\n    latest_manuscript: latestFile.name,\n    manuscript_path: latestFile.path,\n    manuscript_url: latestFile.download_url,\n    total_manuscripts: txtFiles.length,\n    all_manuscripts: txtFiles.map(f => f.name)\n  }\n};"
+      },
+      "id": "74716eea-f3a8-45c4-adf1-c1889f9fcbe6",
+      "name": "Find Latest Manuscript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -128,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Structured Logger Utility\n// Provides structured logging to n8n execution logs\n// Note: n8n Code nodes don't support fs module, so logs go to console only\n\nconst LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };\nconst CURRENT_LOG_LEVEL = LOG_LEVELS.INFO;\n\n// Log function that can be referenced by other nodes\nfunction createLogEntry(level, phase, message, metadata = {}) {\n  if (LOG_LEVELS[level] < CURRENT_LOG_LEVEL) return null;\n\n  const logEntry = {\n    timestamp: new Date().toISOString(),\n    level: level,\n    workflow: 'Autonomous Ghostwriter Pipeline',\n    execution_id: $execution.id || 'unknown',\n    phase: phase,\n    message: message,\n    metadata: metadata\n  };\n\n  // Log to n8n console in structured format\n  const emoji = { DEBUG: '🔍', INFO: 'ℹ️', WARN: '⚠️', ERROR: '❌' }[level] || '';\n  console.log(`${emoji} [${level}] ${phase}: ${message}`);\n  if (Object.keys(metadata).length > 0) {\n    console.log('  Metadata:', JSON.stringify(metadata, null, 2));\n  }\n\n  return logEntry;\n}\n\n// Return logger info\nreturn [{\n  json: {\n    log_initialized: true,\n    log_level: 'INFO',\n    available_levels: ['DEBUG', 'INFO', 'WARN', 'ERROR'],\n    note: 'Logs output to n8n execution console'\n  }\n}];"
+      },
+      "id": "0820b490-4b53-465e-8089-fcddb1c79dbc",
+      "name": "Structured Logger",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        -528
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.request_body }}",
+        "options": {
+          "timeout": 300000,
+          "retry": {
+            "maxTries": 5,
+            "waitBetween": 1000,
+            "waitBeforeGiveUp": 30000
+          }
+        }
+      },
+      "id": "29d31216-6453-48ef-9660-05e54fb80af9",
+      "name": "PHASE 1: Master Planner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        48,
+        -16
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "Og1gLurKNzYw6kfU",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validation: Check Master Planner Response\nconst response = $input.item.json;\n\nconst validation = {\n  has_choices: Array.isArray(response.choices) && response.choices.length > 0,\n  has_content: !!response.choices?.[0]?.message?.content,\n  content_length: response.choices?.[0]?.message?.content?.length || 0,\n  word_count: (response.choices?.[0]?.message?.content || '').split(/\\s+/).length,\n  has_usage: !!response.usage,\n  tokens_used: response.usage?.total_tokens || 0\n};\n\nconst MIN_WORDS = 100;\nconst MIN_TOKENS = 500;\n\nconst isValid = \n  validation.has_choices &&\n  validation.has_content &&\n  validation.word_count >= MIN_WORDS &&\n  validation.tokens_used >= MIN_TOKENS;\n\nif (!isValid) {\n  console.error('❌ Master Planner validation failed:', validation);\n  return [{\n    json: {\n      validation_failed: true,\n      validation_report: validation,\n      required_words: MIN_WORDS,\n      required_tokens: MIN_TOKENS,\n      node: 'PHASE 1: Master Planner'\n    }\n  }];\n}\n\nconsole.log(`✅ Master Planner validation passed: ${validation.word_count} words, ${validation.tokens_used} tokens`);\nreturn [$input.item];"
+      },
+      "id": "b1830a04-ddf5-4da0-95ba-feacec5e16af",
+      "name": "Validate Master Planner",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.validation_failed !== true }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d7abcc8-6fc8-48b2-9c54-6924941e9878",
+      "name": "Validation Gate: Master Planner",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Plan is now already compiled\nconst plan = $input.item.json;\n\nconsole.log('ℹ️  Using compiled improvement plan');\nconsole.log('   Chapters analyzed:', plan.improvement_plan.chapter_analyses.length);\n\nreturn {\n    json: {\n        improvement_plan: plan.improvement_plan,\n        manuscript: plan.manuscript,\n        book_id: plan.book_id\n    }\n};"
+      },
+      "id": "2be61f71-fd6e-40b0-b416-73bd94e56897",
+      "name": "Parse Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse manuscript into existing 15 chapters for analysis\nconst plan = $input.item.json.improvement_plan;\nconst manuscript = $('Decode Manuscript').first().json.data;\nconst chapters = manuscript.split(/CHAPTER (?:undefined|\\d+)/gi).filter(c => c.trim().length > 100);\n\nconsole.log(`ℹ️  Found ${chapters.length} existing chapters in manuscript`);\n\nif (chapters.length !== 15) {\n  console.warn(`⚠️  Expected 15 chapters, found ${chapters.length}`);\n}\n\nconst expansionItems = [];\n\n// Add chapter expansions\nif (plan.expansion_plan?.chapters_to_expand) {\n  plan.expansion_plan.chapters_to_expand.forEach(exp => {\n    const chapterNum = exp.chapter;\n    const chapterText = chapters[chapterNum - 1] || '';\n    const wordCount = chapterText.split(/\\s+/).length;\n    \n    console.log(`   Chapter ${chapterNum}: ${wordCount} words → target ${exp.target_words} words (+${exp.estimated_words})`);\n    \n    expansionItems.push({\n      json: {\n        type: 'expand_chapter',\n        chapter_number: chapterNum,\n        current_text: chapterText,\n        current_word_count: wordCount,\n        expansion_method: exp.expansion_method,\n        scene_outline: exp.scene_outline,\n        placement: exp.placement,\n        target_words: exp.estimated_words,\n        manuscript: manuscript\n      }\n    });\n  });\n}\n\n// Add new chapters (villain POV chapter 8.5, etc.)\nif (plan.expansion_plan?.new_chapters) {\n  plan.expansion_plan.new_chapters.forEach(newCh => {\n    console.log(`   NEW Chapter ${newCh.chapter}: ${newCh.target_words} words (${newCh.character} POV)`);\n    \n    expansionItems.push({\n      json: {\n        type: 'new_chapter',\n        chapter_number: newCh.chapter,\n        character: newCh.character,\n        purpose: newCh.purpose,\n        target_words: newCh.target_words,\n        key_reveals: newCh.key_reveals,\n        manuscript: manuscript\n      }\n    });\n  });\n}\n\nconsole.log(`ℹ️  Created ${expansionItems.length} expansion tasks`);\nconsole.log(`   Target: ${plan.diagnostic_summary.current_word_count} → ${plan.diagnostic_summary.target_word_count} words`);\n\nreturn expansionItems;"
+      },
+      "id": "92d29477-c7a7-4633-94de-5a31b1ca3ef8",
+      "name": "Create Expansion Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": true
+        }
+      },
+      "id": "541b5d5e-0c45-4148-8515-f6aa91ac399c",
+      "name": "PHASE 2: Expansion Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1008,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'gpt-4o',\n  messages: [\n    {\n      role: 'system',\n      content: $('PROMPT: Scene Writer').first().json.system_prompt\n    },\n    {\n      role: 'user',\n      content: 'TASK: ' + $json.type + '\\n\\nCHAPTER NUMBER: ' + $json.chapter_number + '\\n\\nSCENE OUTLINE: ' + ($json.scene_outline || 'See purpose and key_reveals') + '\\n\\nPLACEMENT: ' + ($json.placement || 'New standalone chapter') + '\\n\\nTARGET WORDS: ' + $json.target_words + '\\n\\nCONTEXT (surrounding text):\\n' + ($json.current_text ? $json.current_text.substring(0, 1000) : 'New chapter - no surrounding context') + '\\n\\nCHARACTER: ' + ($json.character || 'Multiple') + '\\n\\nPURPOSE: ' + ($json.purpose || 'Expand thin chapter') + '\\n\\nKEY REVEALS: ' + ($json.key_reveals ? $json.key_reveals.join('; ') : 'None specified') + '\\n\\nWrite the scene in full prose. Follow all style constraints. Match existing voice.'\n    }\n  ],\n  temperature: 0.9,\n  max_tokens: 2500\n} }}",
+        "options": {
+          "timeout": 90000,
+          "retry": {
+            "maxTries": 5,
+            "waitBetween": 1000,
+            "waitBeforeGiveUp": 30000
+          }
+        }
+      },
+      "id": "7dc59261-36e9-4c98-8382-8a3a8e372d67",
+      "name": "Scene Writer AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        -224
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "Og1gLurKNzYw6kfU",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validation: Check Scene Writer Response\nconst response = $input.item.json;\n\nconst validation = {\n  has_choices: Array.isArray(response.choices) && response.choices.length > 0,\n  has_content: !!response.choices?.[0]?.message?.content,\n  content_length: response.choices?.[0]?.message?.content?.length || 0,\n  word_count: (response.choices?.[0]?.message?.content || '').split(/\\s+/).length,\n  tokens_used: response.usage?.total_tokens || 0\n};\n\nconst MIN_WORDS = 200;\nconst MIN_TOKENS = 800;\n\nconst isValid = \n  validation.has_choices &&\n  validation.has_content &&\n  validation.word_count >= MIN_WORDS &&\n  validation.tokens_used >= MIN_TOKENS;\n\nif (!isValid) {\n  console.error('❌ Scene Writer validation failed:', validation);\n  return [{\n    json: {\n      validation_failed: true,\n      validation_report: validation,\n      required_words: MIN_WORDS,\n      required_tokens: MIN_TOKENS,\n      node: 'Scene Writer AI',\n      chapter: $('PHASE 2: Expansion Loop').item.json.chapter_number\n    }\n  }];\n}\n\nconsole.log(`✅ Scene Writer validation passed: ${validation.word_count} words`);\nreturn [$input.item];"
+      },
+      "id": "53fab5dc-6e98-4bab-b8db-0e316dfc78bf",
+      "name": "Validate Scene Writer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.validation_failed !== true }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "abfd5c49-3630-486f-a049-3fbaee417cc1",
+      "name": "Validation Gate: Scene Writer",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1504,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const newScene = $input.item.json.choices[0].message.content;\nconst taskData = $('PHASE 2: Expansion Loop').item.json;\nconst wordCount = newScene.split(/\\\\s+/).length;\n\nconsole.log(`ℹ️  Chapter ${taskData.chapter_number} ${taskData.type} completed: ${wordCount} words`);\n\nreturn {\n  json: {\n    chapter_number: taskData.chapter_number,\n    type: taskData.type,\n    new_content: newScene,\n    word_count: wordCount,\n    placement: taskData.placement\n  }\n};"
+      },
+      "id": "aad09241-10ff-40e1-b729-69d90ae0ba18",
+      "name": "Format New Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 5
+      },
+      "id": "156783bd-cf33-4b34-92a5-518acfaf5277",
+      "name": "Rate Limit Pause",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1856,
+        -224
+      ],
+      "webhookId": "6396314a-c20a-4529-a16c-8db7b86f15c6"
+    },
+    {
+      "parameters": {},
+      "id": "76455fee-7e63-45f2-b440-8609d2a07e99",
+      "name": "Loop Back",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2048,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile all expansions and insert into manuscript\nconst allExpansions = $input.all();\nlet manuscript = $('Parse Plan').first().json.manuscript;\n\nconsole.log(`ℹ️  Compiling ${allExpansions.length} new scenes into manuscript`);\n\n// Sort by chapter number\nconst sorted = allExpansions.sort((a, b) => {\n  const aNum = parseFloat(a.json.chapter_number);\n  const bNum = parseFloat(b.json.chapter_number);\n  return aNum - bNum;\n});\n\n// Insert new content\nconst chapters = manuscript.split(/CHAPTER undefined/gi);\nlet newManuscript = '';\n\nsorted.forEach((exp, idx) => {\n  const chNum = Math.floor(parseFloat(exp.json.chapter_number));\n  \n  if (exp.json.type === 'new_chapter') {\n    console.log(`   + Inserting new Chapter ${exp.json.chapter_number}`);\n    if (chNum <= chapters.length) {\n      chapters.splice(chNum, 0, '\\n\\n' + exp.json.new_content + '\\n\\n');\n    }\n  } else if (exp.json.type === 'expand_chapter') {\n    console.log(`   + Expanding Chapter ${exp.json.chapter_number}`);\n    if (chNum > 0 && chNum <= chapters.length) {\n      chapters[chNum - 1] = chapters[chNum - 1] + '\\n\\n' + exp.json.new_content;\n    }\n  }\n});\n\n// Reassemble with proper chapter headers\nchapters.forEach((ch, idx) => {\n  if (ch.trim().length > 0) {\n    newManuscript += `\\n\\nCHAPTER ${idx + 1}\\n\\n` + ch.trim();\n  }\n});\n\nconst newWordCount = newManuscript.split(/\\\\s+/).length;\nconsole.log(`ℹ️  Expanded manuscript: ${newWordCount} words`);\n\nreturn {\n  json: {\n    manuscript_expanded: newManuscript,\n    word_count: newWordCount,\n    expansions_applied: allExpansions.length,\n    book_id: $('Parse Plan').first().json.book_id\n  }\n};"
+      },
+      "id": "454631d7-2c1c-495c-bfc3-fc82a818e5f3",
+      "name": "Compile Expanded Manuscript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split manuscript into chapters for line editing\nconst manuscript = $input.item.json.manuscript_expanded;\nconst chapters = manuscript.split(/CHAPTER \\\\d+/gi).filter(c => c.trim().length > 100);\n\nconst chapterItems = chapters.map((ch, idx) => ({\n  json: {\n    chapter_number: idx + 1,\n    chapter_text: ch.trim(),\n    kill_list: [\n      'tapestry of',\n      'eyes locked',\n      'eyes met',\n      'the weight of',\n      'seemed to',\n      'felt like',\n      'a mixture of',\n      'a blend of'\n    ]\n  }\n}));\n\nconsole.log(`ℹ️  Preparing ${chapterItems.length} chapters for line editing`);\n\nreturn chapterItems;"
+      },
+      "id": "05a62788-3611-4db7-980c-0aefbb57c51f",
+      "name": "Prepare Line Edit Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1408,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": true
+        }
+      },
+      "id": "5b768b84-06ad-4381-9801-bf9abc42f57c",
+      "name": "PHASE 3: Line Edit Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1600,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'gpt-4o',\n  messages: [\n    {\n      role: 'system',\n      content: $('PROMPT: Line Polish').first().json.system_prompt\n    },\n    {\n      role: 'user',\n      content: 'CHAPTER ' + $json.chapter_number + ':\\n\\n' + $json.chapter_text + '\\n\\nKILL-LIST (remove/replace these phrases):\\n' + $json.kill_list.join('\\n') + '\\n\\nPolish this chapter. Remove purple prose, execute kill-list, tighten dialogue tags, show don\\\\'t tell.'\n    }\n  ],\n  temperature: 0.7,\n  max_tokens: 3000\n} }}",
+        "options": {
+          "timeout": 60000,
+          "retry": {
+            "maxTries": 5,
+            "waitBetween": 1000,
+            "waitBeforeGiveUp": 30000
+          }
+        }
+      },
+      "id": "a3d93a3e-f997-4e37-93aa-58ca7045e472",
+      "name": "Line Editor AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1808,
+        -128
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "Og1gLurKNzYw6kfU",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validation: Check Line Editor Response\nconst response = $input.item.json;\n\nconst validation = {\n  has_choices: Array.isArray(response.choices) && response.choices.length > 0,\n  has_content: !!response.choices?.[0]?.message?.content,\n  word_count: (response.choices?.[0]?.message?.content || '').split(/\\s+/).length,\n  tokens_used: response.usage?.total_tokens || 0\n};\n\nconst MIN_WORDS = 300;\n\nconst isValid = \n  validation.has_choices &&\n  validation.has_content &&\n  validation.word_count >= MIN_WORDS;\n\nif (!isValid) {\n  console.error('❌ Line Editor validation failed:', validation);\n  return [{\n    json: {\n      validation_failed: true,\n      validation_report: validation,\n      required_words: MIN_WORDS,\n      node: 'Line Editor AI',\n      chapter: $('PHASE 3: Line Edit Loop').item.json.chapter_number\n    }\n  }];\n}\n\nconsole.log(`✅ Line Editor validation passed: ${validation.word_count} words`);\nreturn [$input.item];"
+      },
+      "id": "1234bb2f-812c-4306-af2f-b4bdc0536c91",
+      "name": "Validate Line Editor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1952,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.validation_failed !== true }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aba8402c-f084-46da-a4ba-2189aaec0cf0",
+      "name": "Validation Gate: Line Editor",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2096,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const editedChapter = $input.item.json.choices[0].message.content;\nconst chapterNum = $('PHASE 3: Line Edit Loop').item.json.chapter_number;\n\nconsole.log(`ℹ️  Chapter ${chapterNum} line edited`);\n\nreturn {\n  json: {\n    chapter_number: chapterNum,\n    edited_text: editedChapter\n  }\n};"
+      },
+      "id": "cff33497-fdeb-43e7-b480-e5b26ffdc464",
+      "name": "Store Edited Chapter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2288,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 5
+      },
+      "id": "5fe2b2fb-11ec-4d5d-bc18-6d7969a27fdc",
+      "name": "Rate Limit Pause Line Edit",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2464,
+        -128
+      ],
+      "webhookId": "e22fcd4b-21c1-4261-b643-15d4e902c7a0"
+    },
+    {
+      "parameters": {},
+      "id": "fe804028-ed85-4e61-9121-28f9cddcdd9b",
+      "name": "Loop Back Line Edit",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile line-edited manuscript\nconst allChapters = $input.all();\nconst sorted = allChapters.sort((a, b) => a.json.chapter_number - b.json.chapter_number);\n\nlet finalManuscript = 'Ironbound: A Romantasy Novel\\n\\n';\nfinalManuscript += '═══════════════════════════════════════\\n\\n';\nfinalManuscript += '⚠️ AI GENERATED - REQUIRES BETA TESTING\\n\\n';\nfinalManuscript += '═══════════════════════════════════════\\n\\n';\n\nsorted.forEach(ch => {\n  finalManuscript += `\\n\\n# CHAPTER ${ch.json.chapter_number}\\n\\n`;\n  finalManuscript += ch.json.edited_text.trim();\n  finalManuscript += '\\n\\n';\n});\n\nconst finalWordCount = finalManuscript.split(/\\\\s+/).length;\n\nconsole.log(`ℹ️  Line editing complete: ${finalWordCount} words`);\n\nreturn {\n  json: {\n    manuscript_line_edited: finalManuscript,\n    word_count: finalWordCount,\n    book_id: $('Compile Expanded Manuscript').first().json.book_id\n  }\n};"
+      },
+      "id": "05bae80d-bd62-46b7-8127-bf78b5a6ae4a",
+      "name": "Compile Line-Edited Manuscript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'gpt-4o',\n  messages: [\n    {\n      role: 'system',\n      content: $('PROMPT: Consistency Validator').first().json.system_prompt\n    },\n    {\n      role: 'user',\n      content: 'MANUSCRIPT:\\n\\n' + $json.manuscript_line_edited + '\\n\\nCheck for continuity errors, magic consistency, character attribute consistency, timeline logic. Output JSON with error report.'\n    }\n  ],\n  temperature: 0.5,\n  max_tokens: 2000\n} }}",
+        "options": {
+          "timeout": 300000,
+          "retry": {
+            "maxTries": 5,
+            "waitBetween": 1000,
+            "waitBeforeGiveUp": 30000
+          }
+        }
+      },
+      "id": "5dcf63ef-dde5-4f0b-8f7f-1dd9892b0788",
+      "name": "PHASE 4: Consistency Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        80
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "Og1gLurKNzYw6kfU",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const qaResponse = $input.item.json.choices[0].message.content;\nconst manuscript = $('Compile Line-Edited Manuscript').first().json.manuscript_line_edited;\n\nlet qaReport;\ntry {\n  const jsonMatch = qaResponse.match(/```json\\n([\\\\s\\\\S]*?)\\n```/) || qaResponse.match(/```\\n([\\\\s\\\\S]*?)\\n```/);\n  qaReport = jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(qaResponse);\n} catch (e) {\n  console.error('❌ Failed to parse QA report:', e);\n  qaReport = { raw: qaResponse, parsed: false, error: e.message };\n}\n\nconst p1Errors = qaReport.errors?.filter(e => e.severity === 'P1').length || 0;\nconst p2Errors = qaReport.errors?.filter(e => e.severity === 'P2').length || 0;\n\nconsole.log(`ℹ️  QA Report:`);\nconsole.log(`   P1 Errors (Critical): ${p1Errors}`);\nconsole.log(`   P2 Errors (Moderate): ${p2Errors}`);\n\nreturn {\n  json: {\n    qa_report: qaReport,\n    manuscript: manuscript,\n    p1_errors: p1Errors,\n    p2_errors: p2Errors,\n    book_id: $('Compile Line-Edited Manuscript').first().json.book_id\n  }\n};"
+      },
+      "id": "06004d20-2f56-4078-ac2d-ecf03340b50a",
+      "name": "Parse QA Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'gpt-4o',\n  messages: [\n    {\n      role: 'system',\n      content: $('PROMPT: Self-Critic').first().json.system_prompt\n    },\n    {\n      role: 'user',\n      content: 'MANUSCRIPT (first 3 chapters + last 2 chapters for review):\\n\\n' + $json.manuscript.split('CHAPTER').slice(0, 4).join('CHAPTER') + '\\n\\n[... middle chapters omitted for brevity ...]\\n\\n' + $json.manuscript.split('CHAPTER').slice(-3).join('CHAPTER') + '\\n\\nWORD COUNT: ' + $json.manuscript.split(/\\\\s+/).length + '\\n\\nQA REPORT:\\n' + JSON.stringify($json.qa_report, null, 2) + '\\n\\nReview this AI-generated manuscript. Score each category 1-10. Be HARSH.'\n    }\n  ],\n  temperature: 0.6,\n  max_tokens: 1500\n} }}",
+        "options": {
+          "timeout": 120000,
+          "retry": {
+            "maxTries": 5,
+            "waitBetween": 1000,
+            "waitBeforeGiveUp": 30000
+          }
+        }
+      },
+      "id": "ee4fddc1-f2c7-420c-add0-db73f91a8763",
+      "name": "PHASE 5: Self-Critic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        80
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "Og1gLurKNzYw6kfU",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const criticResponse = $input.item.json.choices[0].message.content;\nconst manuscript = $('Parse QA Report').first().json.manuscript;\nconst iteration = $('Configuration').first().json.iteration || 0;\n\nlet criticReport;\ntry {\n  const jsonMatch = criticResponse.match(/```json\\n([\\\\s\\\\S]*?)\\n```/) || criticResponse.match(/```\\n([\\\\s\\\\S]*?)\\n```/);\n  criticReport = jsonMatch ? JSON.parse(jsonMatch[1]) : JSON.parse(criticResponse);\n} catch (e) {\n  console.error('❌ Failed to parse critic report:', e);\n  criticReport = { raw: criticResponse, parsed: false, error: e.message };\n}\n\nconst scores = criticReport.scores || {};\nconst lowestScore = Math.min(...Object.values(scores).filter(v => typeof v === 'number'));\nconst avgScore = Object.values(scores).filter(v => typeof v === 'number').reduce((a, b) => a + b, 0) / Object.values(scores).filter(v => typeof v === 'number').length;\n\nconst revisionNeeded = criticReport.revision_needed || lowestScore < 7 || avgScore < 7.5;\n\n// Prevent infinite iteration loop\nconst MAX_ITERATIONS = 2;\nif (iteration >= MAX_ITERATIONS && revisionNeeded) {\n  console.warn(`⚠️  Max iterations (${MAX_ITERATIONS}) reached. Forcing manual review.`);\n  return {\n    json: {\n      critic_report: criticReport,\n      manuscript_final: manuscript,\n      revision_needed: true,\n      max_iterations_reached: true,\n      average_score: avgScore,\n      lowest_score: lowestScore,\n      book_id: $('Parse QA Report').first().json.book_id,\n      word_count: manuscript.split(/\\\\s+/).length\n    }\n  };\n}\n\nconsole.log(`ℹ️  Self-Critic Results:`);\nconsole.log(`   Average Score: ${avgScore.toFixed(1)}/10`);\nconsole.log(`   Lowest Score: ${lowestScore}/10`);\nconsole.log(`   Revision Needed: ${revisionNeeded ? 'YES ⚠️' : 'NO ✅'}`);\n\nif (!revisionNeeded) {\n  console.log(`✅ MANUSCRIPT APPROVED FOR PUBLICATION!`);\n}\n\nreturn {\n  json: {\n    critic_report: criticReport,\n    manuscript_final: manuscript,\n    revision_needed: revisionNeeded,\n    average_score: avgScore,\n    lowest_score: lowestScore,\n    book_id: $('Parse QA Report').first().json.book_id,\n    word_count: manuscript.split(/\\\\s+/).length\n  }\n};"
+      },
+      "id": "abcced2e-6f3a-42a0-84b5-faace466a0c0",
+      "name": "Evaluate Scores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2608,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.revision_needed }}",
+              "value2": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6728c76d-1e61-453f-aef2-cf3527a9fe58",
+      "name": "Quality Gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2800,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "create",
+        "owner": {
+          "__rl": true,
+          "value": "ortall0201",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "KDP",
+          "mode": "list",
+          "cachedResultName": "KDP",
+          "cachedResultUrl": "https://github.com/ortall0201/KDP"
+        },
+        "filePath": "=books/polished-manuscripts/{{ $json.book_id }}_FINAL.txt",
+        "fileContent": "={{ $json.manuscript_final }}",
+        "commitMessage": "=Polished manuscript complete: {{ $json.word_count }} words (Score: {{ $json.average_score.toFixed(1) }}/10)"
+      },
+      "id": "bde4fceb-49ac-45e2-b46b-90a6e65f4c73",
+      "name": "Commit to GitHub",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [
+        3200,
+        -32
+      ],
+      "webhookId": "4d7e7430-5037-44fb-9b8a-55d5c70f84bb",
+      "credentials": {
+        "githubApi": {
+          "id": "QNCYg9IjlKDIfIEy",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "console.log('⚠️  REVISION NEEDED - Scores too low');\nconsole.log('   Manuscript requires human review or additional iteration.');\n\nif ($json.max_iterations_reached) {\n  console.log('\\n❌ Max iterations reached. Manual intervention required.');\n}\n\nconsole.log('\\nOptions:');\nconsole.log('1. Review critic report and manually fix issues');\nconsole.log('2. Run workflow again with adjusted prompts');\nconsole.log('3. Send to human ghostwriter');\n\nreturn {\n  json: {\n    status: 'FAILED_QA',\n    message: $json.max_iterations_reached ? 'Max iterations reached' : 'Manuscript did not pass self-critic review',\n    critic_report: $json.critic_report,\n    average_score: $json.average_score,\n    book_id: $json.book_id\n  }\n};"
+      },
+      "id": "8c81ca95-1940-4895-9854-419f3b16479e",
+      "name": "Revision Needed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3008,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Master Planner\nconst system_prompt = `You are a Master Planner for fiction ghostwriting automation. Analyze the manuscript and create a detailed improvement plan that other AI agents will execute WITHOUT human approval.\n\n⚠️ CRITICAL: This manuscript ALREADY HAS 15 CHAPTERS (approximately 22,601 words).\n\nYour job is to EXPAND existing chapters and ADD 1 new chapter, NOT create chapters from scratch.\n\nANALYSIS FRAMEWORK:\n1. Identify which of the 15 existing chapters are too thin (< 1,800 words)\n2. Identify structural weaknesses (rushed pacing, unclear stakes)\n3. Identify prose issues (purple prose, telling vs showing, repetitive phrases)\n4. Identify continuity issues (timeline, magic rules, character consistency)\n5. Calculate exact word additions needed: Current 22.6K + Expansions + 1 new chapter = Target 47K\n\nOUTPUT REQUIREMENTS:\n- Must be valid JSON\n- Be SPECIFIC about what to write (not just \"improve X\")\n- Provide scene outlines with 5-7 bullet points\n- Specify exact placement (after which paragraph/scene)\n- Include character emotional states and relationship status\n\nJSON SCHEMA:\n{\n  \"diagnostic_summary\": {\n    \"structural_issues\": [\"issue 1\", \"issue 2\"],\n    \"prose_issues\": [\"issue 1\", \"issue 2\"],\n    \"consistency_issues\": [\"issue 1\", \"issue 2\"],\n    \"current_word_count\": 22600,\n    \"target_word_count\": 47000\n  },\n  \"expansion_plan\": {\n    \"chapters_to_expand\": [\n      {\n        \"chapter\": 6,\n        \"current_words\": 1500,\n        \"target_words\": 2800,\n        \"expansion_method\": \"insert_new_scene\",\n        \"scene_outline\": \"Detailed 5-7 bullet outline of what happens\",\n        \"placement\": \"after_seer_meeting\",\n        \"estimated_words\": 1300\n      }\n    ],\n    \"new_chapters\": [\n      {\n        \"chapter\": \"8.5\",\n        \"type\": \"villain_pov\",\n        \"character\": \"Seraphina\",\n        \"purpose\": \"Add moral complexity and backstory\",\n        \"target_words\": 1400,\n        \"key_reveals\": [\"reveal 1\", \"reveal 2\", \"reveal 3\"]\n      }\n    ]\n  },\n  \"rewrite_targets\": [\n    {\n      \"location\": \"Chapter 10, paragraph 3\",\n      \"issue\": \"Gideon disappears with no explanation\",\n      \"solution\": \"Add scene in Ch 9 where Gideon discovers ward weakness\"\n    }\n  ],\n  \"prose_priorities\": {\n    \"kill_list_targets\": [\"tapestry of\", \"eyes locked\"],\n    \"chapters_needing_heavy_line_edit\": [1, 3, 6],\n    \"telling_to_showing_conversions\": 35\n  }\n}\n\nCRITICAL: Focus on the MIDDLE of the manuscript (Ch 6-10). That's where most expansion is needed.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "1f660333-1a80-4830-a24d-10f078f5aef7",
+      "name": "PROMPT: Master Planner",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Scene Writer\nconst system_prompt = `You are an expert Romantasy ghostwriter. Write new scenes that expand manuscripts to publication length.\n\n❌ ABSOLUTELY FORBIDDEN:\n- Generic openings (\"The sun rose over...\", \"The air was thick with...\")\n- Metaphor chains (max 1 per paragraph)\n- Filter words without immediate action (\"seemed\", \"appeared\", \"felt\")\n- Explaining emotions (\"She felt nervous\" → show via action)\n- Purple prose (\"tapestry\", \"symphony\", \"dance\" unless literal)\n- Info dumps (weave backstory into action/dialogue)\n- Starting scenes with weather or character waking up\n- Abstract emotion descriptions (\"mixture of hope and fear\")\n\n✅ MANDATORY REQUIREMENTS:\n- Start scenes mid-action or with dialogue\n- Show emotion through body language, action, dialogue subtext\n- Vary sentence rhythm (mix 5-word and 20-word sentences)\n- Character-specific voices:\n  * Elara = pragmatic, curious, direct\n  * Caelum = witty, vulnerable beneath confidence, teasing\n  * Gideon = steady, protective, selfless\n  * Seraphina = calculating, elegant, believes she's justified\n- Concrete sensory details (\"jasmine and copper\" not \"intoxicating scents\")\n- Conflict or tension in EVERY scene\n- Scenes must advance: plot OR character OR relationship\n\nROMANTASY GENRE BEATS:\n- Banter with romantic tension (charged but not explicit)\n- Push-pull dynamic (not instant attraction)\n- Forced proximity moments (curse creates opportunities)\n- Emotional vulnerability earned through crisis\n- Action-to-introspection ratio: 60/40\n\nWRITING PROCESS:\n1. Review context - match existing tone and voice\n2. Plan 3-5 scene beats (turning points)\n3. Write focusing on CLARITY and CHARACTER first\n4. Self-edit for forbidden patterns\n5. Check: Does this sound like the existing chapters?\n\nEXAMPLE - GOOD VS BAD:\n\n❌ BAD (AI voice):\n\"The morning sun painted the forest in hues of gold and amber, a tapestry of light and shadow that seemed to breathe with ancient magic. Elara felt a mixture of hope and trepidation as she approached the clearing where the seer had spoken to them. Her heart pounded with anticipation.\"\n\n✅ GOOD (Reedsy quality):\n\"Elara knelt in the clearing, her mother's tome open to a page she'd avoided for weeks. The ritual circle she'd scratched in the dirt looked pathetic—desperate. She'd seen better alchemy from apprentices.\n\n'This is a terrible idea,' Caelum said from the tree line.\n\n'Noted.' She uncorked the vial of quicksilver. It pooled in her palm, cold and alive.\"\n\nNOW WRITE THE REQUESTED SCENE. Match the existing manuscript voice. Be specific and grounded.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "3cabef51-d6ec-4d73-9c9f-460a409bbda3",
+      "name": "PROMPT: Scene Writer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        -496
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Line Polish\nconst system_prompt = `You are a line editor specializing in commercial Romantasy fiction. Polish prose to professional standards WITHOUT changing plot.\n\nYOUR ONLY JOB: Fix how things are said, not what is said.\n\nEXECUTE KILL-LIST:\n- \"tapestry of [X]\" → 70% removal. Replace with: concrete nouns, \"web of\", \"maze of\", or restructure\n- \"eyes locked/met\" → 80% removal. Replace with action beats showing the moment\n- \"the weight of [X]\" → 60% removal. Replace with physical sensation or action\n- \"seemed to\" → 90% removal. Convert to direct statement\n- \"felt [emotion]\" → 85% removal. Show via action/body language\n- \"a mixture/blend of\" → 75% removal. Pick one emotion or show both separately\n\nPURPLE PROSE REDUCTION:\n- Max 1 metaphor per paragraph\n- Cut adjective stacking (\"shimmering, ethereal, luminescent\")\n- Remove obvious descriptions (\"deafening silence\", \"blinding light\")\n- Trust reader (don't explain what metaphors mean)\n\nDIALOGUE TAG RULES:\n- Use \"said\"/\"asked\" 80% of the time\n- Action beat OR tag, not both: ❌ \"'I know,' she said, nodding.\" → ✅ \"'I know.' She nodded.\"\n- Remove adverbs: ❌ \"she said softly\" → ✅ \"she said\" (let dialogue convey tone)\n- Cut creative tags: ❌ \"she breathed\" → ✅ \"she said\"\n\nTELLING → SHOWING:\n❌ \"She felt nervous about the confrontation.\"\n✅ \"Her hands trembled as she reached for the door.\"\n\n❌ \"He was angry but trying to hide it.\"\n✅ \"His jaw tightened. 'Fine.' The word came out flat.\"\n\nSENTENCE VARIETY:\n- Mix short (5-8 words) with flowing (18-25 words)\n- Vary structure: statement, question, fragment for emphasis\n- Read aloud mentally - fix awkward rhythm\n\nPRESERVE:\n- Character voice (Elara ≠ Caelum ≠ Gideon)\n- Banter patterns (don't flatten wit)\n- Plot points and decisions\n- Existing imagery (modify, don't replace)\n\nEXAMPLES:\n\nBEFORE: \"Their eyes locked across the crowded room, a connection that seemed to transcend words, speaking of futures unspoken and promises yet to be made.\"\nAFTER: \"She looked up. He was already watching. The room fell away.\"\n\nBEFORE: \"'I don't know,' she whispered, her voice fragile as spun glass, trembling with the weight of unspoken fears.\"\nAFTER: \"'I don't know.' Her voice barely rose above a whisper.\"\n\nBEFORE: \"The forest was a tapestry of emerald leaves and tangled vines, a symphony of life that seemed to pulse with ancient magic.\"\nAFTER: \"Vines choked the forest floor. Leaves rustled overhead, thick and alive with old magic.\"\n\nOUTPUT FORMAT:\nProvide the edited chapter text. At the end, include:\n\n## Edit Summary\n**Changes:** [number]\n**Word Count:** [before] → [after]\n**Kill-list Reduction:** [percentage]\n\n**Sample Changes (3-5 examples):**\nBEFORE: [...]\nAFTER: [...]\n\nNow edit the provided chapter.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "2dbb3a9b-ddd3-4ed9-b7ee-e92072fac4c9",
+      "name": "PROMPT: Line Polish",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        -448
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Consistency Validator\nconst system_prompt = `You are a continuity checker for fiction manuscripts. Find errors, flag contradictions, verify consistency.\n\nYOUR JOB: Catch mistakes that break reader immersion. Be thorough but not pedantic.\n\nCHECK CATEGORIES:\n\n1. TIMELINE VALIDATION\n- Day/night progression logical?\n- Travel times reasonable? (Can they get from forest to court in stated time?)\n- Seasons/weather consistent?\n- How much time passes between chapters?\n\n2. MAGIC SYSTEM CONSISTENCY\n- Elara's alchemy: What can she do? Limits? Cost?\n- Caelum's Fae magic: Changes when cursed vs not?\n- Curse mechanics: Same symptoms throughout?\n- No power scaling violations (sudden new abilities)\n\n3. CHARACTER ATTRIBUTES\n- Physical descriptions (eye color, hair, height)\n- Personality (would this character say/do this?)\n- Skills/knowledge (sudden expertise?)\n- Relationships (who knows what about whom?)\n\n4. LOCATION LOGIC\n- Geography makes sense?\n- Travel routes consistent?\n- Scene settings clear (interior/exterior, time of day)?\n\n5. PLOT CONTINUITY\n- Setup → payoff (Chekhov's gun)\n- Information flow (who learned what when?)\n- Objects/artifacts tracked (tome from Ch 1?)\n\nERROR SEVERITY:\n- P1 (Critical): Plot contradiction, makes no sense\n- P2 (Moderate): Confusing, might trip readers\n- P3 (Low): Minor, only detail-oriented readers notice\n\nAUTO-FIX IF OBVIOUS:\n- Chapter numbering\n- Typos\n- Dialogue punctuation\n- Formatting\n\nOUTPUT JSON:\n{\n  \"errors\": [\n    {\n      \"severity\": \"P1\",\n      \"category\": \"plot_continuity\",\n      \"location\": \"Chapter 7, paragraph 12\",\n      \"issue\": \"Elara uses tome that was destroyed in Chapter 4\",\n      \"fix_suggestion\": \"Remove reference or add scene in Ch 5 where she recovers it\"\n    }\n  ],\n  \"auto_fixes_applied\": 12,\n  \"continuity_database\": {\n    \"elara\": {\"eyes\": \"amber\", \"hair\": \"auburn\", \"age\": \"~24\"},\n    \"caelum\": {\"eyes\": \"sapphire blue\", \"hair\": \"silver\", \"appearance\": \"ethereal\"},\n    \"timeline\": \"Story spans 8 days total\",\n    \"magic_rules\": \"Elara can manipulate metals within 10 feet, requires concentration\"\n  },\n  \"summary\": {\n    \"p1_errors\": 0,\n    \"p2_errors\": 3,\n    \"p3_errors\": 7,\n    \"overall_consistency\": \"GOOD\"\n  }\n}\n\nBe thorough. Readers notice these things.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "74846623-54fd-47d1-aa7f-72bd55a18ca1",
+      "name": "PROMPT: Consistency Validator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        -368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// SYSTEM PROMPT: Self-Critic\nconst system_prompt = `You are a quality control reviewer. You are reviewing a manuscript that was autonomously expanded and edited by AI.\n\nYOUR JOB: Be BRUTALLY HONEST. Better to catch issues now than in Amazon reviews.\n\nSCORING RUBRIC (1-10 for each):\n\n1. AI_VOICE_DETECTED (higher = less AI voice)\n- 10: Reads like human-written pro fiction\n- 7-9: Mostly natural, few AI tells\n- 4-6: Noticeable AI patterns (metaphor soup, generic openings)\n- 1-3: Screams \"AI wrote this\"\n\nRed flags: \"tapestry of\", starting with weather, explaining emotions\n\n2. CHARACTER_DISTINCTION (can you tell who's speaking?)\n- 10: Each character has unique voice\n- 7-9: Distinct voices, minor overlap\n- 4-6: Dialogue somewhat interchangeable\n- 1-3: All characters sound the same\n\n3. PACING\n- 10: Perfect rhythm, no drag or rush\n- 7-9: Mostly good, minor issues\n- 4-6: Some sections drag or feel rushed\n- 1-3: Seriously uneven pacing\n\n4. STAKES_CLARITY (does reader know what's at risk?)\n- 10: Crystal clear what failure means\n- 7-9: Mostly clear, could be more specific\n- 4-6: Vague stakes (\"bad things happen\")\n- 1-3: No idea what's actually at risk\n\n5. ROMANCE_SATISFACTION\n- 10: Tension builds perfectly, payoff earned\n- 7-9: Good arc, minor missed beats\n- 4-6: Rushed or insufficient buildup\n- 1-3: Unsatisfying or no chemistry\n\n6. PLOT_COMPLETENESS\n- 10: All threads tied, no holes\n- 7-9: Minor loose ends\n- 4-6: Some threads dropped or unresolved\n- 1-3: Major plot holes\n\n7. GENRE_FIT (Romantasy expectations)\n- 10: Nails all genre beats\n- 7-9: Hits most tropes well\n- 4-6: Missing some key elements\n- 1-3: Doesn't feel like Romantasy\n\nExpected: forbidden romance, magical binding, Fae court, strong FMC, enemies-to-lovers, HEA/HFN\n\nPASS/FAIL CRITERIA:\n- ALL categories ≥ 7 → PASS\n- ANY category < 7 → FAIL, revision needed\n- Average < 7.5 → FAIL\n\nOUTPUT JSON:\n{\n  \"scores\": {\n    \"ai_voice_detected\": 8,\n    \"character_distinction\": 7,\n    \"pacing\": 9,\n    \"stakes_clarity\": 8,\n    \"romance_satisfaction\": 7,\n    \"plot_completeness\": 9,\n    \"genre_fit\": 8\n  },\n  \"overall\": \"PASS\",\n  \"average_score\": 8.0,\n  \"revision_needed\": false,\n  \"notes\": \"Minor AI voice in Chapter 3 opening. Romance could be 10% more charged in Chapters 11-12. Otherwise publication-ready.\",\n  \"specific_issues\": [\n    \"Chapter 3: Opens with 'The morning sun...' - too generic\",\n    \"Chapter 11: Romantic tension peaks too early, fizzles by Chapter 13\"\n  ],\n  \"strengths\": [\n    \"Character banter is excellent\",\n    \"Magic system clear and consistent\",\n    \"Villain has proper depth\"\n  ]\n}\n\nBe harsh. This determines if we publish or iterate.`;\n\nreturn { json: { system_prompt } };"
+      },
+      "id": "4ef13095-6ef7-424b-ac78-409b2f24a6ae",
+      "name": "PROMPT: Self-Critic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split manuscript into individual chapters for analysis\nconst manuscript = $('Decode Manuscript').first().json.data;\nconst config = $('Configuration').first().json;\n\n// Find all chapter markers with their positions\nconst chapterRegex = /CHAPTER (\\d+)/gi;\nconst matches = [];\nlet match;\n\nwhile ((match = chapterRegex.exec(manuscript)) !== null) {\n    matches.push({\n        chapterNumber: parseInt(match[1]),\n        position: match.index,\n        fullMatch: match[0]\n    });\n}\n\nconsole.log(`ℹ️  Found ${matches.length} chapter markers`);\n\nif (matches.length === 0) {\n    throw new Error('No CHAPTER markers found in manuscript. Make sure chapters are labeled \"CHAPTER 1\", \"CHAPTER 2\", etc.');\n}\n\n// Extract chapter text between markers\nconst chapterItems = [];\n\nfor (let i = 0; i < matches.length; i++) {\n    const currentMatch = matches[i];\n    const nextMatch = matches[i + 1];\n\n    // Extract text from current chapter marker to next chapter marker (or end of manuscript)\n    const startPos = currentMatch.position + currentMatch.fullMatch.length;\n    const endPos = nextMatch ? nextMatch.position : manuscript.length;\n\n    const chapterText = manuscript.substring(startPos, endPos).trim();\n    const wordCount = chapterText.split(/\\s+/).filter(w => w.length > 0).length;\n\n    console.log(`   Chapter ${currentMatch.chapterNumber}: ${wordCount} words`);\n\n    // Only include if it has substantial content (> 100 words)\n    if (wordCount > 100) {\n        chapterItems.push({\n            json: {\n                chapter_number: currentMatch.chapterNumber,\n                chapter_text: chapterText,\n                word_count: wordCount,\n                known_issues: config.known_issues,\n                target_word_count: config.target_word_count,\n                total_chapters: matches.length\n            }\n        });\n    } else {\n        console.log(`   ⚠️  Chapter ${currentMatch.chapterNumber} too short, skipping`);\n    }\n}\n\nconsole.log(`\\nℹ️  Split into ${chapterItems.length} valid chapters`);\n\nreturn chapterItems;"
+      },
+      "id": "split-chapters-001",
+      "name": "Split Manuscript into Chapters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": true
+        }
+      },
+      "id": "phase1-chapter-loop-001",
+      "name": "PHASE 1: Chapter Analysis Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        656,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build request to analyze ONE chapter\nconst chapterData = $input.first().json;\nconst systemPrompt = $('PROMPT: Master Planner').first().json.system_prompt;\n\n// Build focused user prompt for this chapter\nconst userPrompt = `Analyze CHAPTER ${chapterData.chapter_number} of ${chapterData.total_chapters}:\n\nCHAPTER TEXT (${chapterData.word_count} words):\n${chapterData.chapter_text}\n\nKNOWN ISSUES FOR THIS MANUSCRIPT:\n${chapterData.known_issues.join('\\n')}\n\nTARGET: Expand from current ${chapterData.word_count} words to ~${Math.round(chapterData.target_word_count / chapterData.total_chapters)} words per chapter.\n\nAnalyze this chapter and provide:\n1. Current issues (pacing, prose, character development)\n2. Expansion opportunities (scenes to add, depth needed)\n3. Specific improvements needed\n\nOutput in JSON format with keys: chapter, current_issues, expansion_plan, estimated_words_to_add`;\n\nconst requestBody = {\n    model: 'gpt-4o',\n    messages: [\n        {\n            role: 'system',\n            content: systemPrompt\n        },\n        {\n            role: 'user',\n            content: userPrompt\n        }\n    ],\n    temperature: 0.7,\n    max_tokens: 2000\n};\n\nconsole.log(`ℹ️  Built analysis request for Chapter ${chapterData.chapter_number}`);\nconsole.log(`   Chapter: ${chapterData.word_count} words`);\n\nreturn {\n    json: {\n        request_body: requestBody,\n        chapter_number: chapterData.chapter_number,\n        chapter_text: chapterData.chapter_text,\n        word_count: chapterData.word_count\n    }\n};"
+      },
+      "id": "build-chapter-analysis-request-001",
+      "name": "Build Chapter Analysis Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        -304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Store the analysis for this chapter\nconst response = $input.first().json;\nconst loopItem = $('PHASE 1: Chapter Analysis Loop').item.json;\nconst chapterNumber = loopItem.chapter_number;\n\n// Extract analysis\nconst analysisText = response.choices[0].message.content;\n\nlet chapterAnalysis;\ntry {\n    const jsonMatch = analysisText.match(/```json\\n([\\\\s\\\\S]*?)\\n```/) || analysisText.match(/```\\n([\\\\s\\\\S]*?)\\n```/);\n    if (jsonMatch) {\n        chapterAnalysis = JSON.parse(jsonMatch[1]);\n    } else {\n        chapterAnalysis = JSON.parse(analysisText);\n    }\n} catch (e) {\n    chapterAnalysis = {\n        chapter: chapterNumber,\n        raw_analysis: analysisText\n    };\n}\n\nconsole.log(`ℹ️  Analyzed Chapter ${chapterNumber}`);\n\n// Just output this chapter's analysis - Compile will use $input.all()\nreturn {\n    json: {\n        chapter_number: chapterNumber,\n        analysis: chapterAnalysis,\n        word_count: loopItem.word_count || 0,\n        tokens_used: response.usage?.total_tokens || 0\n    }\n};"
+      },
+      "id": "store-chapter-analysis-001",
+      "name": "Store Chapter Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        -304
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 5
+      },
+      "id": "rate-limit-chapter-analysis-001",
+      "name": "Rate Limit Pause Chapter Analysis",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1520,
+        -304
+      ],
+      "webhookId": "chapter-analysis-rate-limit-001"
+    },
+    {
+      "parameters": {},
+      "id": "loop-back-chapter-analysis-001",
+      "name": "Loop Back Chapter Analysis",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1696,
+        -304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect ALL chapter analyses using $input.all()\nconst allAnalyses = $input.all();\nconst config = $('Configuration').first().json;\nconst manuscript = $('Decode Manuscript').first().json.data;\n\nconsole.log(`ℹ️  Compiling ${allAnalyses.length} chapter analyses`);\n\nif (allAnalyses.length === 0) {\n    console.error('❌ No analyses received!');\n    throw new Error('No chapter analyses received. Loop may not have completed.');\n}\n\n// Sort by chapter number\nconst sorted = allAnalyses\n    .map(item => item.json)\n    .sort((a, b) => a.chapter_number - b.chapter_number);\n\nconsole.log(`   Chapters: ${sorted.map(a => a.chapter_number).join(', ')}`);\n\n// Build improvement plan\nconst improvementPlan = {\n    diagnostic_summary: {\n        total_chapters_analyzed: sorted.length,\n        current_word_count: manuscript.split(/\\s+/).length,\n        target_word_count: config.target_word_count,\n        structural_issues: [],\n        prose_issues: config.known_issues\n    },\n    expansion_plan: {\n        chapters_to_expand: [],\n        new_chapters: []\n    },\n    chapter_analyses: []\n};\n\n// Process each analysis\nsorted.forEach(item => {\n    const chapterNum = item.chapter_number;\n    const analysis = item.analysis;\n\n    improvementPlan.chapter_analyses.push({\n        chapter: chapterNum,\n        analysis: analysis || {},\n        tokens_used: item.tokens_used || 0\n    });\n\n    if (analysis && typeof analysis === 'object') {\n        if (analysis.expansion_plan) {\n            improvementPlan.expansion_plan.chapters_to_expand.push({\n                chapter: chapterNum,\n                current_words: item.word_count || 0,\n                expansion_method: 'scene_expansion',\n                scene_outline: typeof analysis.expansion_plan === 'string'\n                    ? analysis.expansion_plan\n                    : JSON.stringify(analysis.expansion_plan),\n                estimated_words: analysis.estimated_words_to_add || 1000,\n                placement: 'throughout_chapter'\n            });\n        }\n\n        if (analysis.current_issues) {\n            const issues = Array.isArray(analysis.current_issues)\n                ? analysis.current_issues\n                : [`Chapter ${chapterNum}: ${analysis.current_issues}`];\n            improvementPlan.diagnostic_summary.structural_issues.push(...issues);\n        }\n    }\n});\n\nconst totalTokens = sorted.reduce((sum, item) => sum + (item.tokens_used || 0), 0);\n\nconsole.log(`\\n✅ Compiled ${sorted.length} chapters`);\nconsole.log(`   Expansions: ${improvementPlan.expansion_plan.chapters_to_expand.length}`);\nconsole.log(`   Tokens: ${totalTokens}`);\n\nreturn {\n    json: {\n        improvement_plan: improvementPlan,\n        manuscript: manuscript,\n        book_id: config.book_id,\n        total_tokens: totalTokens,\n        chapters_analyzed: sorted.length\n    }\n};"
+      },
+      "id": "compile-chapter-analyses-001",
+      "name": "Compile All Chapter Analyses",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify that plan is complete and ready\nconst plan = $input.item.json.improvement_plan;\n\nconst expectedChapters = 15;\nconst analyzedChapters = plan.chapter_analyses?.length || 0;\n\nif (analyzedChapters < expectedChapters) {\n    throw new Error(`Incomplete plan: only ${analyzedChapters} of ${expectedChapters} chapters analyzed`);\n}\n\nconsole.log(`✅ Plan verification passed:`);\nconsole.log(`   Analyzed: ${analyzedChapters} chapters`);\nconsole.log(`   Expansions planned: ${plan.expansion_plan.chapters_to_expand.length}`);\n\nreturn [$input.item];"
+      },
+      "id": "verify-plan-complete-001",
+      "name": "Verify Plan Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        -112
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "List Manuscripts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Configuration",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Structured Logger",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PROMPT: Master Planner",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PROMPT: Scene Writer",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PROMPT: Line Polish",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PROMPT: Consistency Validator",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PROMPT: Self-Critic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Manuscripts": {
+      "main": [
+        [
+          {
+            "node": "Find Latest Manuscript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Latest Manuscript": {
+      "main": [
+        [
+          {
+            "node": "Load Manuscript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Manuscript": {
+      "main": [
+        [
+          {
+            "node": "Decode Manuscript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode Manuscript": {
+      "main": [
+        [
+          {
+            "node": "Split Manuscript into Chapters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PHASE 1: Master Planner": {
+      "main": [
+        [
+          {
+            "node": "Validate Master Planner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Master Planner": {
+      "main": [
+        [
+          {
+            "node": "Validation Gate: Master Planner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation Gate: Master Planner": {
+      "main": [
+        [
+          {
+            "node": "Store Chapter Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Plan": {
+      "main": [
+        [
+          {
+            "node": "Create Expansion Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Expansion Tasks": {
+      "main": [
+        [
+          {
+            "node": "PHASE 2: Expansion Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PHASE 2: Expansion Loop": {
+      "main": [
+        [
+          {
+            "node": "Scene Writer AI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Compile Expanded Manuscript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scene Writer AI": {
+      "main": [
+        [
+          {
+            "node": "Validate Scene Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Scene Writer": {
+      "main": [
+        [
+          {
+            "node": "Validation Gate: Scene Writer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation Gate: Scene Writer": {
+      "main": [
+        [
+          {
+            "node": "Format New Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format New Content": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit Pause",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Pause": {
+      "main": [
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back": {
+      "main": [
+        [
+          {
+            "node": "PHASE 2: Expansion Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Expanded Manuscript": {
+      "main": [
+        [
+          {
+            "node": "Prepare Line Edit Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Line Edit Tasks": {
+      "main": [
+        [
+          {
+            "node": "PHASE 3: Line Edit Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PHASE 3: Line Edit Loop": {
+      "main": [
+        [
+          {
+            "node": "Line Editor AI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Compile Line-Edited Manuscript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Line Editor AI": {
+      "main": [
+        [
+          {
+            "node": "Validate Line Editor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Line Editor": {
+      "main": [
+        [
+          {
+            "node": "Validation Gate: Line Editor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation Gate: Line Editor": {
+      "main": [
+        [
+          {
+            "node": "Store Edited Chapter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Edited Chapter": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit Pause Line Edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Pause Line Edit": {
+      "main": [
+        [
+          {
+            "node": "Loop Back Line Edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back Line Edit": {
+      "main": [
+        [
+          {
+            "node": "PHASE 3: Line Edit Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Line-Edited Manuscript": {
+      "main": [
+        [
+          {
+            "node": "PHASE 4: Consistency Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PHASE 4: Consistency Check": {
+      "main": [
+        [
+          {
+            "node": "Parse QA Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse QA Report": {
+      "main": [
+        [
+          {
+            "node": "PHASE 5: Self-Critic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PHASE 5: Self-Critic": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Scores": {
+      "main": [
+        [
+          {
+            "node": "Quality Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Gate": {
+      "main": [
+        [
+          {
+            "node": "Commit to GitHub",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Revision Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Manuscript into Chapters": {
+      "main": [
+        [
+          {
+            "node": "PHASE 1: Chapter Analysis Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PHASE 1: Chapter Analysis Loop": {
+      "main": [
+        [
+          {
+            "node": "Build Chapter Analysis Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Compile All Chapter Analyses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Chapter Analysis Request": {
+      "main": [
+        [
+          {
+            "node": "PHASE 1: Master Planner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Chapter Analysis": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit Pause Chapter Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Pause Chapter Analysis": {
+      "main": [
+        [
+          {
+            "node": "Loop Back Chapter Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Back Chapter Analysis": {
+      "main": [
+        [
+          {
+            "node": "PHASE 1: Chapter Analysis Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile All Chapter Analyses": {
+      "main": [
+        [
+          {
+            "node": "Verify Plan Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Plan Complete": {
+      "main": [
+        [
+          {
+            "node": "Parse Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "Ghostwriter Error Handler",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true
+  },
+  "versionId": "925c4a44-11fa-458c-b72c-a80accba239d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "581e20d2fec9926791d1116b4b380b0eeba22c82b0d832727d287b410300ab00"
+  },
+  "id": "v8evXT25DmfAU24X",
+  "tags": []
+}
