@@ -13,6 +13,7 @@ import { StatusBar } from 'expo-status-bar';
 import HomeScreen from './src/screens/HomeScreen';
 import ProcessingScreen from './src/screens/ProcessingScreen';
 import CompletedScreen from './src/screens/CompletedScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
 
 const Stack = createStackNavigator();
 
@@ -46,6 +47,11 @@ export default function App() {
           name="Completed"
           component={CompletedScreen}
           options={{ title: 'Completed' }}
+        />
+        <Stack.Screen
+          name="Settings"
+          component={SettingsScreen}
+          options={{ title: 'API Keys Settings' }}
         />
       </Stack.Navigator>
     </NavigationContainer>

@@ -13,6 +13,7 @@ import {
   ScrollView,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../services/api';
 
 export default function HomeScreen({ navigation }) {
@@ -55,13 +56,28 @@ export default function HomeScreen({ navigation }) {
       return;
     }
 
+    // Check for API keys
+    const openaiKey = await AsyncStorage.getItem('openai_key');
+    const anthropicKey = await AsyncStorage.getItem('anthropic_key');
+
+    if (!openaiKey || !anthropicKey) {
+      Alert.alert(
+        'API Keys Required',
+        'Please configure your OpenAI and Anthropic API keys in Settings before processing manuscripts.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => navigation.navigate('Settings') }
+        ]
+      );
+      return;
+    }
+
     if (!health || health.status !== 'healthy') {
       Alert.alert(
         'System Not Ready',
         'Backend system is not fully configured. Please check:\n' +
         '• Redis is running\n' +
-        '• ChromaDB is running\n' +
-        '• API keys are configured'
+        '• ChromaDB is running'
       );
       return;
     }
@@ -69,7 +85,7 @@ export default function HomeScreen({ navigation }) {
     setUploading(true);
 
     try {
-      const response = await api.uploadManuscript(selectedFile);
+      const response = await api.uploadManuscript(selectedFile, openaiKey, anthropicKey);
 
       // Navigate to processing screen
       navigation.navigate('Processing', {
@@ -145,6 +161,14 @@ export default function HomeScreen({ navigation }) {
             Transform your manuscript with AI-powered multi-agent editing
           </Text>
         </View>
+
+        {/* Settings Button */}
+        <TouchableOpacity
+          style={styles.settingsButton}
+          onPress={() => navigation.navigate('Settings')}
+        >
+          <Text style={styles.settingsButtonText}>⚙️ Configure API Keys</Text>
+        </TouchableOpacity>
 
         {/* System Health */}
         {renderHealthStatus()}
@@ -242,6 +266,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     textAlign: 'center',
+  },
+  settingsButton: {
+    backgroundColor: '#6366f1',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  settingsButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   healthContainer: {
     backgroundColor: '#fff',

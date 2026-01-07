@@ -36,9 +36,11 @@ class GhostwriterAPI {
   /**
    * Upload manuscript file
    * @param {Object} file - File object with uri, name, type
+   * @param {string} openaiKey - OpenAI API key
+   * @param {string} anthropicKey - Anthropic API key
    * @returns {Promise} - Job ID and book ID
    */
-  async uploadManuscript(file) {
+  async uploadManuscript(file, openaiKey, anthropicKey) {
     try {
       const formData = new FormData();
       formData.append('file', {
@@ -50,6 +52,8 @@ class GhostwriterAPI {
       const response = await this.api.post('/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
+          'X-OpenAI-Key': openaiKey,
+          'X-Anthropic-Key': anthropicKey,
         },
       });
 

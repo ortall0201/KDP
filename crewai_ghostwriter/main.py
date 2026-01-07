@@ -57,6 +57,8 @@ class GhostwriterOrchestrator:
     def __init__(
         self,
         book_id: str,
+        openai_key: str = None,
+        anthropic_key: str = None,
         redis_host: str = "localhost",
         redis_port: int = 6379,
         chromadb_host: str = "localhost",
@@ -68,6 +70,8 @@ class GhostwriterOrchestrator:
 
         Args:
             book_id: Unique identifier for this book
+            openai_key: OpenAI API key (optional, uses env if not provided)
+            anthropic_key: Anthropic API key (optional, uses env if not provided)
             redis_host: Redis server host
             redis_port: Redis server port
             chromadb_host: ChromaDB server host
@@ -76,6 +80,12 @@ class GhostwriterOrchestrator:
         """
         self.book_id = book_id
         self.verbose = verbose
+
+        # Set API keys as environment variables if provided
+        if openai_key:
+            os.environ["OPENAI_API_KEY"] = openai_key
+        if anthropic_key:
+            os.environ["ANTHROPIC_API_KEY"] = anthropic_key
 
         # Initialize memory systems
         self.manuscript_memory = ManuscriptMemory(

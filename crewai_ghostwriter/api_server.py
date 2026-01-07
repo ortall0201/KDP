@@ -238,16 +238,28 @@ def health_check():
 @app.post("/upload")
 async def upload_manuscript(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    x_openai_key: str = Header(..., alias="X-OpenAI-Key"),
+    x_anthropic_key: str = Header(..., alias="X-Anthropic-Key")
 ):
     """
     Upload a manuscript file and start processing.
 
     Returns job_id for tracking progress.
+
+    Requires user's API keys in headers:
+    - X-OpenAI-Key: User's OpenAI API key
+    - X-Anthropic-Key: User's Anthropic API key
     """
     # Validate file type
     if not file.filename.endswith('.txt'):
         raise HTTPException(status_code=400, detail="Only .txt files are supported")
+
+    # Validate API keys
+    if not x_openai_key.startswith("sk-"):
+        raise HTTPException(status_code=400, detail="Invalid OpenAI API key format")
+    if not x_anthropic_key.startswith("sk-ant-"):
+        raise HTTPException(status_code=400, detail="Invalid Anthropic API key format")
 
     # Generate job ID
     job_id = str(uuid.uuid4())
@@ -266,12 +278,14 @@ async def upload_manuscript(
     # Create job
     create_job(job_id)
 
-    # Start processing in background
+    # Start processing in background with USER'S API keys
     background_tasks.add_task(
         process_manuscript_async,
         job_id=job_id,
         book_id=book_id,
-        file_path=str(file_path)
+        file_path=str(file_path),
+        openai_key=x_openai_key,
+        anthropic_key=x_anthropic_key
     )
 
     return {
@@ -346,23 +360,32 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
 # BACKGROUND PROCESSING
 # ============================================================================
 
-async def process_manuscript_async(job_id: str, book_id: str, file_path: str):
+async def process_manuscript_async(job_id: str, book_id: str, file_path: str, openai_key: str, anthropic_key: str):
     """
     Process manuscript in background with progress updates.
 
     This wraps the orchestrator and updates job status at each step.
+
+    Args:
+        job_id: Unique job identifier
+        book_id: Unique book identifier
+        file_path: Path to uploaded manuscript
+        openai_key: User's OpenAI API key
+        anthropic_key: User's Anthropic API key
     """
     try:
         update_job(
             job_id,
             status="processing",
-            log_message="Initializing ghostwriter system...",
+            log_message="Initializing ghostwriter system with your API keys...",
             progress=5
         )
 
-        # Create orchestrator
+        # Create orchestrator with USER'S API keys
         orchestrator = GhostwriterOrchestrator(
             book_id=book_id,
+            openai_key=openai_key,
+            anthropic_key=anthropic_key,
             verbose=False
         )
 
