@@ -9,6 +9,12 @@ import axios from 'axios';
 // For production: your deployed server URL
 const API_BASE_URL = 'http://localhost:8080';
 
+/**
+ * Backend Status Values:
+ * - Job Status: "queued", "processing", "completed", "failed"
+ * - Phase Status: "pending", "running", "completed", "error"
+ */
+
 class GhostwriterAPI {
   constructor() {
     this.api = axios.create({
@@ -128,24 +134,44 @@ class GhostwriterAPI {
    * @param {string} jobId
    * @param {Function} callback
    * @param {number} interval - Poll interval in ms
+   * @returns {Function} Cleanup function to stop polling
    */
   pollJobStatus(jobId, callback, interval = 2000) {
+    let timeoutId = null;
+    let isCancelled = false;
+
     const poll = async () => {
+      if (isCancelled) return;
+
       try {
         const status = await this.getJobStatus(jobId);
+
+        if (isCancelled) return;
+
         callback(status);
 
-        // Continue polling if not completed or failed
-        if (status.status === 'processing' || status.status === 'queued') {
-          setTimeout(poll, interval);
+        // Continue polling if not completed or failed (backend uses: "queued", "processing")
+        if ((status.status === 'queued' || status.status === 'processing') && !isCancelled) {
+          timeoutId = setTimeout(poll, interval);
         }
       } catch (error) {
         console.error('Polling failed:', error);
-        callback({ error: error.message });
+        if (!isCancelled) {
+          callback({ error: error.message });
+        }
       }
     };
 
     poll();
+
+    // Return cleanup function
+    return () => {
+      isCancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
   }
 }
 

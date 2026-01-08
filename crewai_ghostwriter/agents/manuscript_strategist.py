@@ -5,14 +5,14 @@ The "brain" of the system. Analyzes entire manuscript, creates improvement
 plans, and flags cross-chapter issues.
 """
 
-from crewai import Agent
-from typing import List
+from crewai import Agent, LLM
+from typing import List, Union
 from crewai_tools import BaseTool
 
 
 def create_manuscript_strategist(
     tools: List[BaseTool],
-    model: str = "gpt-4o",
+    model: Union[str, LLM] = "gpt-4o",
     verbose: bool = True
 ) -> Agent:
     """

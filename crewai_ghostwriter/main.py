@@ -6,12 +6,13 @@ This is the entry point that coordinates all 6 agents to process a manuscript.
 
 import os
 import sys
+import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
 import json
 
 from dotenv import load_dotenv
-from crewai import Crew, Task, Process
+from crewai import Crew, Task, Process, LLM
 
 # Load environment variables
 load_dotenv()
@@ -23,6 +24,11 @@ from crewai_ghostwriter.core import (
     WorkflowStateManager,
     TaskStatus,
     TaskType
+)
+
+from crewai_ghostwriter.core.orchestration import (
+    ParallelExecutor,
+    MultiProviderRateLimiter
 )
 
 from crewai_ghostwriter.agents import (
@@ -81,6 +87,10 @@ class GhostwriterOrchestrator:
         self.book_id = book_id
         self.verbose = verbose
 
+        # Store API keys for explicit LLM configuration
+        self.openai_key = openai_key or os.getenv("OPENAI_API_KEY")
+        self.anthropic_key = anthropic_key or os.getenv("ANTHROPIC_API_KEY")
+
         # Set API keys as environment variables if provided
         if openai_key:
             os.environ["OPENAI_API_KEY"] = openai_key
@@ -108,6 +118,15 @@ class GhostwriterOrchestrator:
         # Initialize agents (will be created when needed)
         self.agents = {}
         self.tools = {}
+
+        # Initialize parallel execution components
+        self.rate_limiter = MultiProviderRateLimiter()
+        self.parallel_executor = ParallelExecutor(
+            state_manager=self.state_manager,
+            max_concurrent=5,
+            rate_limiter=self.rate_limiter,
+            verbose=self.verbose
+        )
 
     def load_manuscript(self, manuscript_path: str):
         """
@@ -148,6 +167,20 @@ class GhostwriterOrchestrator:
         """Create all agents with their tools."""
         print("\n🤖 Initializing agents...")
 
+        # Create LLM instances with explicit API keys
+        gpt4o_llm = LLM(
+            model="gpt-4o",
+            api_key=self.openai_key
+        )
+        gpt4o_mini_llm = LLM(
+            model="gpt-4o-mini",
+            api_key=self.openai_key
+        )
+        claude_llm = LLM(
+            model="anthropic/claude-sonnet-4-5",
+            api_key=self.anthropic_key
+        )
+
         # Manuscript Strategist
         self.tools['strategist'] = get_strategist_tools(
             self.manuscript_memory,
@@ -156,6 +189,7 @@ class GhostwriterOrchestrator:
         )
         self.agents['strategist'] = create_manuscript_strategist(
             tools=self.tools['strategist'],
+            model=gpt4o_llm,
             verbose=self.verbose
         )
         print("  ✓ Manuscript Strategist")
@@ -168,6 +202,7 @@ class GhostwriterOrchestrator:
         )
         self.agents['architect'] = create_scene_architect(
             tools=self.tools['architect'],
+            model=gpt4o_llm,
             verbose=self.verbose
         )
         print("  ✓ Scene Architect")
@@ -179,6 +214,7 @@ class GhostwriterOrchestrator:
         )
         self.agents['continuity'] = create_continuity_guardian(
             tools=self.tools['continuity'],
+            model=gpt4o_mini_llm,
             verbose=self.verbose
         )
         print("  ✓ Continuity Guardian")
@@ -187,6 +223,7 @@ class GhostwriterOrchestrator:
         self.tools['editor'] = get_editor_tools(self.manuscript_memory)
         self.agents['editor'] = create_line_editor(
             tools=self.tools['editor'],
+            model=gpt4o_llm,
             verbose=self.verbose
         )
         print("  ✓ Line Editor")
@@ -194,10 +231,12 @@ class GhostwriterOrchestrator:
         # QA Agent
         self.tools['qa'] = get_qa_tools(
             self.manuscript_memory,
-            self.long_term_memory
+            self.long_term_memory,
+            self.state_manager
         )
         self.agents['qa'] = create_qa_agent(
             tools=self.tools['qa'],
+            model=claude_llm,
             verbose=self.verbose
         )
         print("  ✓ QA Agent")
@@ -209,6 +248,7 @@ class GhostwriterOrchestrator:
         )
         self.agents['learning'] = create_learning_coordinator(
             tools=self.tools['learning'],
+            model=gpt4o_mini_llm,
             verbose=self.verbose
         )
         print("  ✓ Learning Coordinator")
@@ -302,12 +342,14 @@ class GhostwriterOrchestrator:
         print(f"\n✓ Continuity database built")
 
     def _run_expansion(self):
-        """Expand all chapters."""
+        """Expand all chapters using parallel execution."""
         chapters = self.manuscript_memory.get_all_chapters()
+        chapter_numbers = sorted(chapters.keys())
 
-        for ch_num in sorted(chapters.keys()):
-            print(f"\n  Expanding Chapter {ch_num}...")
+        print(f"\n  Expanding {len(chapter_numbers)} chapters in parallel...")
 
+        # Define async task executor for expansion
+        async def expand_chapter(ch_num: int):
             task = Task(
                 description=get_architect_expansion_task(ch_num),
                 agent=self.agents['architect'],
@@ -318,19 +360,32 @@ class GhostwriterOrchestrator:
                 agents=[self.agents['architect']],
                 tasks=[task],
                 process=Process.sequential,
-                verbose=self.verbose
+                verbose=False  # Reduce noise in parallel execution
             )
 
             result = crew.kickoff()
-            print(f"  ✓ Chapter {ch_num} expanded")
+            return result
+
+        # Execute all chapters in parallel with rate limiting
+        results = asyncio.run(
+            self.parallel_executor.execute_chapter_batch(
+                chapter_numbers=chapter_numbers,
+                task_executor=expand_chapter,
+                provider="openai"
+            )
+        )
+
+        print(f"  ✓ All {len(chapter_numbers)} chapters expanded")
 
     def _run_editing(self):
-        """Polish all chapters."""
+        """Polish all chapters using parallel execution."""
         chapters = self.manuscript_memory.get_all_chapters()
+        chapter_numbers = sorted(chapters.keys())
 
-        for ch_num in sorted(chapters.keys()):
-            print(f"\n  Editing Chapter {ch_num}...")
+        print(f"\n  Editing {len(chapter_numbers)} chapters in parallel...")
 
+        # Define async task executor for editing
+        async def edit_chapter(ch_num: int):
             task = Task(
                 description=get_line_edit_task(ch_num),
                 agent=self.agents['editor'],
@@ -341,11 +396,22 @@ class GhostwriterOrchestrator:
                 agents=[self.agents['editor']],
                 tasks=[task],
                 process=Process.sequential,
-                verbose=self.verbose
+                verbose=False  # Reduce noise in parallel execution
             )
 
             result = crew.kickoff()
-            print(f"  ✓ Chapter {ch_num} polished")
+            return result
+
+        # Execute all chapters in parallel with rate limiting
+        results = asyncio.run(
+            self.parallel_executor.execute_chapter_batch(
+                chapter_numbers=chapter_numbers,
+                task_executor=edit_chapter,
+                provider="openai"
+            )
+        )
+
+        print(f"  ✓ All {len(chapter_numbers)} chapters polished")
 
     def _run_qa(self) -> bool:
         """Run QA evaluation. Returns True if pass, False if fail."""

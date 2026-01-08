@@ -8,8 +8,8 @@ This file contains the remaining agents:
 - Learning Coordinator
 """
 
-from crewai import Agent
-from typing import List
+from crewai import Agent, LLM
+from typing import List, Union
 from crewai_tools import BaseTool
 
 
@@ -19,7 +19,7 @@ from crewai_tools import BaseTool
 
 def create_continuity_guardian(
     tools: List[BaseTool],
-    model: str = "gpt-4o-mini",
+    model: Union[str, LLM] = "gpt-4o-mini",
     verbose: bool = True
 ) -> Agent:
     """
@@ -92,7 +92,7 @@ def get_continuity_tools(manuscript_memory, state_manager) -> List[BaseTool]:
 
 def create_line_editor(
     tools: List[BaseTool],
-    model: str = "gpt-4o",
+    model: Union[str, LLM] = "gpt-4o",
     verbose: bool = True
 ) -> Agent:
     """
@@ -157,7 +157,7 @@ def get_editor_tools(manuscript_memory) -> List[BaseTool]:
 
 def create_qa_agent(
     tools: List[BaseTool],
-    model: str = "claude-sonnet-4-5",
+    model: Union[str, LLM] = "claude-sonnet-4-5",
     verbose: bool = True
 ) -> Agent:
     """
@@ -244,7 +244,7 @@ def get_qa_tools(manuscript_memory, long_term_memory, state_manager) -> List[Bas
 
 def create_learning_coordinator(
     tools: List[BaseTool],
-    model: str = "gpt-4o-mini",
+    model: Union[str, LLM] = "gpt-4o-mini",
     verbose: bool = True
 ) -> Agent:
     """

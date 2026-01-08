@@ -18,20 +18,93 @@ import api from '../services/api';
 
 export default function HomeScreen({ navigation }) {
   const [health, setHealth] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [checkingActiveJob, setCheckingActiveJob] = useState(true);
 
   useEffect(() => {
-    checkSystemHealth();
+    initializeScreen();
   }, []);
+
+  const initializeScreen = async () => {
+    setLoading(true);
+    setCheckingActiveJob(true);
+
+    // Check for active job first (prevents race conditions)
+    await checkForActiveJob();
+
+    // Then check system health
+    await checkSystemHealth();
+
+    setLoading(false);
+    setCheckingActiveJob(false);
+  };
+
+  const checkForActiveJob = async () => {
+    try {
+      const activeJobId = await AsyncStorage.getItem('active_job_id');
+      const activeBookId = await AsyncStorage.getItem('active_book_id');
+
+      if (activeJobId && activeBookId) {
+        // Verify job is still running by checking status
+        try {
+          const jobStatus = await api.getJobStatus(activeJobId);
+
+          // Backend uses: "queued", "processing", "completed", "failed"
+          if (jobStatus.status === 'queued' || jobStatus.status === 'processing') {
+            // Job is still active, offer to resume
+            Alert.alert(
+              'Active Job Found',
+              'You have a processing job in progress. Would you like to resume?',
+              [
+                {
+                  text: 'Cancel',
+                  style: 'cancel',
+                  onPress: async () => {
+                    // Clear stored job if user cancels
+                    await AsyncStorage.removeItem('active_job_id');
+                    await AsyncStorage.removeItem('active_book_id');
+                  }
+                },
+                {
+                  text: 'Resume',
+                  onPress: () => {
+                    navigation.navigate('Processing', {
+                      jobId: activeJobId,
+                      bookId: activeBookId
+                    });
+                  }
+                }
+              ]
+            );
+          } else {
+            // Job completed or failed, clear storage
+            await AsyncStorage.removeItem('active_job_id');
+            await AsyncStorage.removeItem('active_book_id');
+          }
+        } catch (error) {
+          // Job not found or error checking status, clear storage
+          await AsyncStorage.removeItem('active_job_id');
+          await AsyncStorage.removeItem('active_book_id');
+        }
+      }
+    } catch (error) {
+      console.error('Error checking for active job:', error);
+    }
+  };
 
   const checkSystemHealth = async () => {
     try {
       const healthData = await api.checkHealth();
       setHealth(healthData);
     } catch (error) {
-      Alert.alert('Error', 'Failed to connect to backend server');
+      const errorMessage = error.response?.data?.detail ||
+                          error.message ||
+                          'Failed to connect to backend server. Please ensure the server is running.';
+
+      Alert.alert('Connection Error', errorMessage);
+      console.error('Health check error:', error);
     }
   };
 
@@ -93,7 +166,14 @@ export default function HomeScreen({ navigation }) {
         bookId: response.book_id,
       });
     } catch (error) {
-      Alert.alert('Upload Failed', error.message || 'Failed to upload manuscript');
+      // Extract error message from various error formats
+      const errorMessage = error.response?.data?.detail ||
+                          error.response?.data?.message ||
+                          error.message ||
+                          'Failed to upload manuscript. Please check your connection and try again.';
+
+      Alert.alert('Upload Failed', errorMessage);
+      console.error('Upload error:', error);
     } finally {
       setUploading(false);
     }
@@ -205,13 +285,13 @@ export default function HomeScreen({ navigation }) {
         <TouchableOpacity
           style={[
             styles.uploadButton,
-            (!selectedFile || uploading || health?.status !== 'healthy') &&
+            (!selectedFile || uploading || checkingActiveJob || health?.status !== 'healthy') &&
               styles.uploadButtonDisabled,
           ]}
           onPress={uploadManuscript}
-          disabled={!selectedFile || uploading || health?.status !== 'healthy'}
+          disabled={!selectedFile || uploading || checkingActiveJob || health?.status !== 'healthy'}
         >
-          {uploading ? (
+          {uploading || checkingActiveJob ? (
             <ActivityIndicator color="#fff" />
           ) : (
             <Text style={styles.uploadButtonText}>🚀 Start Processing</Text>

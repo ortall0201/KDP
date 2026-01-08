@@ -10,7 +10,9 @@ import {
   ScrollView,
   ActivityIndicator,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../services/api';
 
 export default function ProcessingScreen({ route, navigation }) {
@@ -18,29 +20,106 @@ export default function ProcessingScreen({ route, navigation }) {
   const [status, setStatus] = useState(null);
   const [logs, setLogs] = useState([]);
   const wsRef = useRef(null);
+  const pollCleanupRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
 
   useEffect(() => {
+    // Store job ID for resumption after app restart
+    const storeActiveJob = async () => {
+      try {
+        await AsyncStorage.setItem('active_job_id', jobId);
+        await AsyncStorage.setItem('active_book_id', bookId);
+      } catch (error) {
+        console.error('Error storing active job:', error);
+      }
+    };
+    storeActiveJob();
+
     // Connect to WebSocket for real-time updates
+    connectWebSocket();
+
+    // Cleanup on unmount
+    return () => {
+      // Clean up WebSocket
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+
+      // Clean up polling if active
+      if (pollCleanupRef.current) {
+        pollCleanupRef.current();
+        pollCleanupRef.current = null;
+      }
+
+      // Clear reconnect timeout
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    };
+  }, [jobId, bookId]);
+
+  const connectWebSocket = () => {
     wsRef.current = api.connectWebSocket(
       jobId,
       handleStatusUpdate,
       handleWebSocketError,
       handleWebSocketClose
     );
+  };
 
-    // Cleanup on unmount
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
+  // Handle back button/gesture - prevent accidental navigation away
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      // Only intercept if job is still processing
+      if (!status || status.status === 'completed' || status.status === 'failed') {
+        // Job is done, allow navigation
+        return;
       }
-    };
-  }, [jobId]);
 
-  const handleStatusUpdate = (data) => {
+      // Prevent default behavior of leaving the screen
+      e.preventDefault();
+
+      // Show confirmation dialog
+      Alert.alert(
+        'Leave Processing?',
+        'Your manuscript is still being processed. The job will continue in the background, but you may lose real-time updates.\n\nAre you sure you want to leave?',
+        [
+          {
+            text: 'Stay',
+            style: 'cancel',
+            onPress: () => {}
+          },
+          {
+            text: 'Leave',
+            style: 'destructive',
+            onPress: () => {
+              // Allow navigation
+              navigation.dispatch(e.data.action);
+            }
+          }
+        ]
+      );
+    });
+
+    return unsubscribe;
+  }, [navigation, status]);
+
+  const handleStatusUpdate = async (data) => {
     setStatus(data);
 
     // Navigate to completed screen when done
     if (data.status === 'completed') {
+      // Clear stored job ID since job is complete
+      try {
+        await AsyncStorage.removeItem('active_job_id');
+        await AsyncStorage.removeItem('active_book_id');
+      } catch (error) {
+        console.error('Error clearing active job:', error);
+      }
+
       navigation.replace('Completed', {
         jobId: jobId,
         bookId: bookId,
@@ -51,12 +130,34 @@ export default function ProcessingScreen({ route, navigation }) {
 
   const handleWebSocketError = (error) => {
     console.error('WebSocket error:', error);
-    // Fallback to polling if WebSocket fails
-    api.pollJobStatus(jobId, handleStatusUpdate, 3000);
+    attemptReconnection();
   };
 
   const handleWebSocketClose = () => {
     console.log('WebSocket closed');
+    attemptReconnection();
+  };
+
+  const attemptReconnection = () => {
+    const maxAttempts = 5;
+    const backoffDelays = [1000, 2000, 5000, 10000, 30000]; // Exponential backoff
+
+    if (reconnectAttemptsRef.current < maxAttempts) {
+      const delay = backoffDelays[reconnectAttemptsRef.current] || 30000;
+      console.log(`Attempting reconnection ${reconnectAttemptsRef.current + 1}/${maxAttempts} in ${delay}ms`);
+
+      reconnectTimeoutRef.current = setTimeout(() => {
+        reconnectAttemptsRef.current += 1;
+        connectWebSocket();
+      }, delay);
+    } else {
+      // Max reconnection attempts reached, fallback to polling
+      console.log('Max WebSocket reconnection attempts reached. Falling back to polling.');
+      if (pollCleanupRef.current) {
+        pollCleanupRef.current(); // Clean up any existing polling
+      }
+      pollCleanupRef.current = api.pollJobStatus(jobId, handleStatusUpdate, 3000);
+    }
   };
 
   if (!status) {

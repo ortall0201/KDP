@@ -5,14 +5,14 @@ Writes publication-quality scenes with non-linear awareness.
 Can flag issues while writing.
 """
 
-from crewai import Agent
-from typing import List
+from crewai import Agent, LLM
+from typing import List, Union
 from crewai_tools import BaseTool
 
 
 def create_scene_architect(
     tools: List[BaseTool],
-    model: str = "gpt-4o",
+    model: Union[str, LLM] = "gpt-4o",
     verbose: bool = True
 ) -> Agent:
     """
